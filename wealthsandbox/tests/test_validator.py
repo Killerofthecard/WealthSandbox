@@ -1,0 +1,267 @@
+"""Tests for the centralized ActionValidator and guard functions."""
+
+import unittest
+
+from wealthsandbox.systems.career import CareerSystem
+from wealthsandbox.types import Action, AgentState, CareerMove, JobStatus
+from wealthsandbox.validator import (
+    ActionValidator,
+    GuardResult,
+    guard_switch_occupation,
+    guard_switch_occupation_target,
+    guard_upskill,
+    guard_intensive_work,
+    guard_quit_job,
+)
+
+
+class TestGuardResult(unittest.TestCase):
+
+    def test_ok(self):
+        r = GuardResult.ok()
+        self.assertTrue(r.allowed)
+        self.assertEqual(r.event_key, "")
+
+    def test_reject(self):
+        r = GuardResult.reject("key", "message")
+        self.assertFalse(r.allowed)
+        self.assertEqual(r.event_key, "key")
+        self.assertEqual(r.message, "message")
+
+
+class TestGuardFunctions(unittest.TestCase):
+
+    def setUp(self):
+        self.career = CareerSystem()
+
+    # --- guard_switch_occupation ---
+
+    def test_switch_blocked_during_training(self):
+        state = AgentState(
+            training_months_remaining=3,
+            training_target_occupation="software_engineer",
+        )
+        r = guard_switch_occupation(state, self.career)
+        self.assertFalse(r.allowed)
+
+    def test_switch_allowed_when_not_training(self):
+        state = AgentState(training_months_remaining=0)
+        r = guard_switch_occupation(state, self.career)
+        self.assertTrue(r.allowed)
+
+    # --- guard_switch_occupation_target ---
+
+    def test_switch_target_empty_id(self):
+        state = AgentState()
+        r = guard_switch_occupation_target(state, self.career, "")
+        self.assertFalse(r.allowed)
+
+    def test_switch_target_invalid_occupation(self):
+        state = AgentState()
+        r = guard_switch_occupation_target(state, self.career, "astronaut")
+        self.assertFalse(r.allowed)
+
+    def test_switch_target_skill_too_low(self):
+        state = AgentState(general_skill=1, cash=50_000)
+        r = guard_switch_occupation_target(state, self.career, "software_engineer")
+        self.assertFalse(r.allowed)
+        self.assertIn("general skill", r.message.lower())
+
+    def test_switch_target_insufficient_cash(self):
+        state = AgentState(general_skill=5, cash=100)
+        r = guard_switch_occupation_target(state, self.career, "software_engineer")
+        self.assertFalse(r.allowed)
+        self.assertIn("insufficient cash", r.message.lower())
+
+    def test_switch_target_allowed(self):
+        state = AgentState(general_skill=5, cash=50_000)
+        r = guard_switch_occupation_target(state, self.career, "software_engineer")
+        self.assertTrue(r.allowed)
+
+    def test_switch_target_no_barrier_occupation(self):
+        state = AgentState(general_skill=1, cash=5_000)
+        r = guard_switch_occupation_target(state, self.career, "manufacturing_worker")
+        self.assertTrue(r.allowed)
+
+    # --- guard_upskill ---
+
+    def test_upskill_at_max_skill(self):
+        state = AgentState(general_skill=10)
+        r = guard_upskill(state, self.career)
+        self.assertFalse(r.allowed)
+
+    def test_upskill_already_in_progress(self):
+        state = AgentState(general_skill=3, upskill_months_remaining=4)
+        r = guard_upskill(state, self.career)
+        self.assertFalse(r.allowed)
+
+    def test_upskill_insufficient_cash(self):
+        state = AgentState(general_skill=3, cash=100)
+        r = guard_upskill(state, self.career)
+        self.assertFalse(r.allowed)
+
+    def test_upskill_allowed(self):
+        state = AgentState(general_skill=3, cash=10_000)
+        r = guard_upskill(state, self.career)
+        self.assertTrue(r.allowed)
+
+    # --- guard_intensive_work ---
+
+    def test_intensive_work_not_employed(self):
+        state = AgentState(job_status=JobStatus.UNEMPLOYED)
+        r = guard_intensive_work(state, self.career)
+        self.assertFalse(r.allowed)
+
+    def test_intensive_work_allowed(self):
+        state = AgentState(
+            occupation_id="manufacturing_worker",
+            job_status=JobStatus.EMPLOYED,
+            occupation_skills={"manufacturing_worker": 1},
+        )
+        r = guard_intensive_work(state, self.career)
+        self.assertTrue(r.allowed)
+
+    # --- Energy guard (via closure) ---
+
+    def test_upskill_blocked_by_low_energy(self):
+        validator = ActionValidator(self.career, energy_threshold=0.4)
+        state = AgentState(general_skill=3, cash=10_000, energy=0.2)
+        action = Action(career_move=CareerMove.UPSKILL)
+        r = validator.validate(action, state)
+        self.assertFalse(r.allowed)
+        self.assertIn("energy", r.message.lower())
+
+    def test_upskill_allowed_with_sufficient_energy(self):
+        validator = ActionValidator(self.career, energy_threshold=0.4)
+        state = AgentState(general_skill=3, cash=10_000, energy=0.6)
+        action = Action(career_move=CareerMove.UPSKILL)
+        r = validator.validate(action, state)
+        self.assertTrue(r.allowed)
+
+    # --- Health guard on switch ---
+
+    def test_switch_blocked_by_low_health(self):
+        state = AgentState(general_skill=5, cash=50_000, health=0.4)
+        r = guard_switch_occupation_target(state, self.career, "manufacturing_worker")
+        self.assertFalse(r.allowed)
+        self.assertIn("health", r.message.lower())
+
+    def test_switch_allowed_with_sufficient_health(self):
+        state = AgentState(general_skill=1, cash=5_000, health=0.8)
+        r = guard_switch_occupation_target(state, self.career, "manufacturing_worker")
+        self.assertTrue(r.allowed)
+
+    def test_switch_desk_job_allowed_with_low_health(self):
+        state = AgentState(general_skill=5, cash=50_000, health=0.4)
+        r = guard_switch_occupation_target(state, self.career, "civil_servant")
+        self.assertTrue(r.allowed)
+
+    # --- guard_quit_job ---
+
+    def test_quit_when_employed(self):
+        state = AgentState(job_status=JobStatus.EMPLOYED)
+        r = guard_quit_job(state, self.career)
+        self.assertTrue(r.allowed)
+
+    def test_quit_when_unemployed(self):
+        state = AgentState(job_status=JobStatus.UNEMPLOYED)
+        r = guard_quit_job(state, self.career)
+        self.assertFalse(r.allowed)
+
+
+class TestActionValidator(unittest.TestCase):
+
+    def setUp(self):
+        self.career = CareerSystem()
+        self.validator = ActionValidator(self.career)
+
+    def test_validate_upskill_allowed(self):
+        state = AgentState(general_skill=3, cash=10_000)
+        action = Action(career_move=CareerMove.UPSKILL)
+        r = self.validator.validate(action, state)
+        self.assertTrue(r.allowed)
+
+    def test_validate_upskill_blocked(self):
+        state = AgentState(general_skill=10)
+        action = Action(career_move=CareerMove.UPSKILL)
+        r = self.validator.validate(action, state)
+        self.assertFalse(r.allowed)
+
+    def test_validate_quit_allowed(self):
+        state = AgentState(job_status=JobStatus.EMPLOYED)
+        action = Action(career_move=CareerMove.QUIT_JOB)
+        r = self.validator.validate(action, state)
+        self.assertTrue(r.allowed)
+
+    def test_validate_quit_blocked(self):
+        state = AgentState(job_status=JobStatus.UNEMPLOYED)
+        action = Action(career_move=CareerMove.QUIT_JOB)
+        r = self.validator.validate(action, state)
+        self.assertFalse(r.allowed)
+
+    def test_validate_none_always_ok(self):
+        state = AgentState()
+        action = Action(career_move=CareerMove.NONE)
+        r = self.validator.validate(action, state)
+        self.assertTrue(r.allowed)
+
+    # --- available_actions ---
+
+    def test_available_actions_employed(self):
+        state = AgentState(
+            occupation_id="manufacturing_worker",
+            job_status=JobStatus.EMPLOYED,
+            general_skill=3,
+            cash=10_000,
+            occupation_skills={"manufacturing_worker": 1},
+        )
+        avail = self.validator.available_actions(state)
+        self.assertTrue(avail["upskill"]["allowed"])
+        self.assertTrue(avail["quit_job"]["allowed"])
+        self.assertTrue(avail["switch_occupation"]["allowed"])
+        self.assertTrue(avail["intensive_work"]["allowed"])
+
+    def test_available_actions_during_training(self):
+        state = AgentState(
+            occupation_id="manufacturing_worker",
+            job_status=JobStatus.EMPLOYED,
+            general_skill=3,
+            cash=10_000,
+            training_months_remaining=3,
+            training_target_occupation="software_engineer",
+            occupation_skills={"manufacturing_worker": 1},
+        )
+        avail = self.validator.available_actions(state)
+        self.assertTrue(avail["upskill"]["allowed"])
+        self.assertTrue(avail["quit_job"]["allowed"])
+        self.assertFalse(avail["switch_occupation"]["allowed"])
+
+    def test_available_actions_unemployed(self):
+        state = AgentState(
+            job_status=JobStatus.UNEMPLOYED,
+            general_skill=1,
+            cash=100,
+        )
+        avail = self.validator.available_actions(state)
+        self.assertFalse(avail["upskill"]["allowed"])
+        self.assertFalse(avail["quit_job"]["allowed"])
+        self.assertFalse(avail["intensive_work"]["allowed"])
+        self.assertTrue(avail["switch_occupation"]["allowed"])
+
+    def test_available_actions_low_energy_shows_reason(self):
+        validator = ActionValidator(self.career, energy_threshold=0.4)
+        state = AgentState(
+            occupation_id="manufacturing_worker",
+            job_status=JobStatus.EMPLOYED,
+            general_skill=3,
+            cash=10_000,
+            energy=0.2,
+            occupation_skills={"manufacturing_worker": 1},
+        )
+        avail = validator.available_actions(state)
+        self.assertFalse(avail["upskill"]["allowed"])
+        self.assertIn("energy", avail["upskill"]["reason"].lower())
+
+
+if __name__ == "__main__":
+    unittest.main()
