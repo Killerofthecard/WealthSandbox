@@ -20,6 +20,10 @@ class CareerMove(str, Enum):
     UPSKILL = "upskill"                         # invest money to improve general skill
     QUIT_JOB = "quit_job"                       # voluntarily resign (become unemployed)
     INTENSIVE_WORK = "intensive_work"           # invest energy to improve occupation skill
+    DEPOSIT = "deposit"                         # move cash to savings
+    WITHDRAW = "withdraw"                       # move savings to cash
+    BORROW = "borrow"                           # take a bank loan
+    REPAY = "repay"                             # repay bank loan
 
 
 class JobStatus(str, Enum):
@@ -70,6 +74,8 @@ class AgentState:
     health: float = 1.0
     energy: float = 1.0
     cash: float = 0.0
+    savings: float = 0.0              # bank savings balance
+    loan_balance: float = 0.0         # bank loan balance (owed)
 
     # Two-dimensional skill
     general_skill: int = 1
@@ -107,6 +113,7 @@ class Action:
     """
     career_move: CareerMove = CareerMove.NONE
     target_occupation_id: str = ""
+    amount: float = 0.0
 
 
 @dataclass

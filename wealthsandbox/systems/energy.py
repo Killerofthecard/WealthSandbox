@@ -28,7 +28,7 @@ class EnergySystem(BaseSystem):
         self,
         cost_per_upskill: float = 0.4,
         decline_per_training_month: float = 0.15,
-        recovery_per_month: float = 0.02,
+        recovery_per_month: float = 0.10,
     ):
         """
         Args:

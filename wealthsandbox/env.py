@@ -20,10 +20,11 @@ from wealthsandbox.config import EnvConfig
 from wealthsandbox.macro_layer import MacroLayer
 from wealthsandbox.micro_layer import MicroLayer
 from wealthsandbox.types import Action, Observation, AgentState, CareerMove
-from wealthsandbox.agents.tools import ToolCall, SWITCH_OCCUPATION, UPSKILL, INTENSIVE_WORK, QUIT_JOB
+from wealthsandbox.agents.tools import ToolCall, SWITCH_OCCUPATION, UPSKILL, INTENSIVE_WORK, QUIT_JOB, DEPOSIT, WITHDRAW, BORROW, REPAY
 from wealthsandbox.systems.base import BaseSystem
 from wealthsandbox.systems.career import CareerSystem
 from wealthsandbox.systems.living import LivingExpenseSystem
+from wealthsandbox.systems.bank import BankSystem
 from wealthsandbox.systems.health import HealthSystem
 from wealthsandbox.systems.aging import AgingSystem
 from wealthsandbox.systems.energy import EnergySystem
@@ -111,6 +112,7 @@ def _build_default_systems(config: EnvConfig) -> List[BaseSystem]:
         LivingExpenseSystem(
             monthly_living_expense=config.monthly_living_expense,
         ),
+        BankSystem(),
         HealthSystem(
             decline_20_29=config.health_decline_20_29,
             decline_30_39=config.health_decline_30_39,
@@ -183,7 +185,6 @@ class WealthSandBoxEnv:
         )
 
         self.history: List[Dict[str, Any]] = []
-        self._tick_done: bool = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -203,7 +204,6 @@ class WealthSandBoxEnv:
         self.micro.reset()
         self.macro = MacroLayer(self.config)
         self.history.clear()
-        self._tick_done = False
         return self._make_observation()
 
     def step(
@@ -213,61 +213,70 @@ class WealthSandBoxEnv:
     ) -> Tuple[Observation, float, bool, Dict[str, Any]]:
         """Advance one month.
 
-        Accepts either a pre-built ``Action`` or a list of ``ToolCall`` objects
-        from an LLM agent.  If ``tool_calls`` is provided it is converted to
-        an ``Action`` first.
+        Three-phase cycle (reordered so agent sees post-tick state):
 
-        If the agent's action is rejected by the validator the month does
-        **not** advance — tick has already run (income, timers, energy) but
-        expenses and health decline are deferred.  The returned ``info`` dict
-        carries ``action_rejected=True`` so the runner can let the agent retry
-        within the same month.
+        Phase 1 — EXECUTE: validate actions on simulated state, then execute
+                 on real state.  Rejection returns immediately with no side
+                 effects (no tick, no expense deduction, no month advance).
+        Phase 2 — TICK:    all systems run automatic monthly logic (income,
+                            layoff, timers, energy, health check).
+        Phase 3 — FINALISE: deduct expenses, bank interest, health decline,
+                            advance calendar, check termination.
 
-        Returns:
-            observation, reward, done, info
+        Observation is built AFTER tick+finalise, so the agent always sees
+        the freshest state (including layoffs that just happened).
         """
+        import copy
+
         if tool_calls is not None:
-            action = self.apply_tool_calls(tool_calls)
-        if action is None:
-            action = Action()
+            actions: List[Action] = self.apply_tool_calls(tool_calls)
+        elif action is not None:
+            actions = [action]
+        else:
+            actions = [Action()]
 
         state = self.micro.state
+        state.last_month_events.clear()
 
-        # ---- Phase 1: monthly tick (runs ONCE per month) ------------------
-        if not self._tick_done:
-            state.last_month_events.clear()
-            macro_snapshot = self.macro.snapshot()  # pre-step macro
-            for sys in self.systems:
-                sys.tick(state, macro_snapshot)
-            self._tick_done = True
-
-        # ---- Phase 2: validate agent action -------------------------------
-        if action.career_move != CareerMove.NONE:
-            result = self._validate_action(action, state)
+        # ---- Phase 1: validate + execute actions -------------------------
+        # Validate on a deepcopy so rejections leave real state untouched.
+        sim_state = copy.deepcopy(state)
+        for a in actions:
+            if a.career_move == CareerMove.NONE:
+                continue
+            result = self._validate_action(a, sim_state)
             if not result.allowed:
                 state.last_month_events.append("rejected:" + result.message)
+                # Build observation from (unchanged) real state — no tick,
+                # no expenses, no month advance.
                 obs = self._make_observation()
                 return obs, 0.0, False, {
                     "action_rejected": True,
                     "rejection_message": result.message,
                 }
-
-            # Execute the (now-validated) action — every system gets a chance
-            # to react.  CareerSystem handles switch/upskill/quit; EnergySystem
-            # deducts stamina on upskill.  Systems that don't care return False.
             for sys in self.systems:
-                sys.handle_action(action, state)
+                sys.handle_action(a, sim_state)
 
-        # ---- Phase 3: month finalisation (only on success or NONE) ---------
+        # Execute on real state (all validations passed).
+        for a in actions:
+            if a.career_move == CareerMove.NONE:
+                continue
+            for sys in self.systems:
+                sys.handle_action(a, state)
+
+        # ---- Phase 2: tick (income, layoff, timers, energy) --------------
+        # Runs AFTER actions so the agent's next observation reflects any
+        # layoff / income / timer events that just occurred.
+        macro_snapshot = self.macro.snapshot()
+        for sys in self.systems:
+            sys.tick(state, macro_snapshot)
+
+        # ---- Phase 3: finalise (expenses, health, calendar, death) --------
         self.macro.step()
-
-        # Post-action processing: expenses, health, aging (in list order).
         macro_post = self.macro.snapshot()
         for sys in self.systems:
             sys.finalize(state, macro_post)
 
-        # Poll every system for terminal conditions.  The first non-None
-        # response wins (systems are checked in list order).
         done = False
         reason = ""
         for sys in self.systems:
@@ -277,16 +286,17 @@ class WealthSandBoxEnv:
                 reason = dead_reason
                 break
 
-        # Floor cash at 0 (cosmetic — bankruptcy is already decided above)
         state.cash = max(0.0, state.cash)
 
-        # Archive
+        # ---- Phase 4: archive + observation --------------------------------
         self.history.append({
             "month": self.macro.total_months,
             "year": self.macro.year,
             "cal_month": self.macro.month,
             "age": state.age,
             "cash": round(state.cash, 2),
+            "savings": round(state.savings, 2),
+            "loan_balance": round(state.loan_balance, 2),
             "energy": round(state.energy, 3),
             "occupation_id": state.occupation_id,
             "general_skill": state.general_skill,
@@ -300,27 +310,34 @@ class WealthSandBoxEnv:
             "intensive_work_months_remaining": state.intensive_work_months_remaining,
             "training_months_remaining": state.training_months_remaining,
             "events": list(state.last_month_events),
-            # Macro snapshot
             "macro": {
                 "unrate": round(self.macro.unrate, 4),
                 "usrecm": self.macro.usrecm,
+                "fedfunds": round(self.macro.fedfunds, 2),
                 "cycle_label": getattr(self.macro, "current_cycle_label", ""),
                 "cycle_file": getattr(self.macro, "current_cycle_file", ""),
                 "economy_status": _economy_status(self.macro.unrate, self.macro.usrecm),
             },
         })
 
-        self._tick_done = False  # ready for next month
-
         obs = self._make_observation()
         reward = state.monthly_after_tax_income
-        info = {"termination_reason": reason}
+        info: Dict[str, Any] = {"termination_reason": reason}
         return obs, reward, done, info
 
     def _validate_action(self, action: Action, state: AgentState):
-        """Run the appropriate validator for *action*."""
-        if action.career_move == CareerMove.SWITCH_OCCUPATION:
+        """Dispatch to the appropriate action-specific validator."""
+        move = action.career_move
+        if move == CareerMove.SWITCH_OCCUPATION:
             return self.validator.validate_switch_target(action, state)
+        elif move == CareerMove.DEPOSIT:
+            return self.validator.validate_deposit(action, state)
+        elif move == CareerMove.WITHDRAW:
+            return self.validator.validate_withdraw(action, state)
+        elif move == CareerMove.BORROW:
+            return self.validator.validate_borrow(action, state)
+        elif move == CareerMove.REPAY:
+            return self.validator.validate_repay(action, state)
         return self.validator.validate(action, state)
 
     def get_state_snapshot(self) -> Dict[str, Any]:
@@ -445,14 +462,13 @@ class WealthSandBoxEnv:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def apply_tool_calls(tool_calls: List[ToolCall]) -> Action:
-        """Convert a list of LLM tool calls into a single environment Action.
+    def apply_tool_calls(tool_calls: List[ToolCall]) -> List[Action]:
+        """Convert LLM tool calls into a list of environment Actions.
 
-        Only the first occurrence of each tool is used.
+        Each tool call becomes one Action.  Multiple tools can be called in
+        one month — e.g. ``deposit(3000)`` + ``upskill()``.
         """
-        career_move = CareerMove.NONE
-        target_occupation_id = ""
-
+        actions: List[Action] = []
         seen: set = set()
         for tc in tool_calls:
             if tc.tool_name in seen:
@@ -461,19 +477,40 @@ class WealthSandBoxEnv:
             params = tc.parameters or {}
 
             if tc.tool_name == SWITCH_OCCUPATION:
-                career_move = CareerMove.SWITCH_OCCUPATION
-                target_occupation_id = params.get("occupation_id", "")
+                actions.append(Action(
+                    career_move=CareerMove.SWITCH_OCCUPATION,
+                    target_occupation_id=params.get("occupation_id", ""),
+                ))
             elif tc.tool_name == UPSKILL:
-                career_move = CareerMove.UPSKILL
+                actions.append(Action(career_move=CareerMove.UPSKILL))
             elif tc.tool_name == INTENSIVE_WORK:
-                career_move = CareerMove.INTENSIVE_WORK
+                actions.append(Action(career_move=CareerMove.INTENSIVE_WORK))
             elif tc.tool_name == QUIT_JOB:
-                career_move = CareerMove.QUIT_JOB
+                actions.append(Action(career_move=CareerMove.QUIT_JOB))
+            elif tc.tool_name == DEPOSIT:
+                actions.append(Action(
+                    career_move=CareerMove.DEPOSIT,
+                    amount=float(params.get("amount", 0)),
+                ))
+            elif tc.tool_name == WITHDRAW:
+                actions.append(Action(
+                    career_move=CareerMove.WITHDRAW,
+                    amount=float(params.get("amount", 0)),
+                ))
+            elif tc.tool_name == BORROW:
+                actions.append(Action(
+                    career_move=CareerMove.BORROW,
+                    amount=float(params.get("amount", 0)),
+                ))
+            elif tc.tool_name == REPAY:
+                actions.append(Action(
+                    career_move=CareerMove.REPAY,
+                    amount=float(params.get("amount", 0)),
+                ))
 
-        return Action(
-            career_move=career_move,
-            target_occupation_id=target_occupation_id,
-        )
+        if not actions:
+            actions.append(Action(career_move=CareerMove.NONE))
+        return actions
 
     # ------------------------------------------------------------------
     # Observation assembly
@@ -493,17 +530,11 @@ class WealthSandBoxEnv:
         )
         macro_snapshot["switch_base_cost"] = self.career.switch_base_cost
         macro_snapshot["living_expense"] = self.career.living_expense
-        # Show which actions are currently legal.
-        # The agent's cash shown in the observation is the *end-of-month* cash
-        # (after expenses), but validation in the next step() happens AFTER
-        # tick has added the month's income.  Temporarily project cash forward
-        # so the ✓/✗ markers accurately reflect what will be available.
-        original_cash = self.micro.state.cash
-        self.micro.state.cash += self.micro.state.monthly_after_tax_income
+        # Cash already includes this month's income (tick ran before observation).
+        # No projection needed — use actual state for available_actions.
         macro_snapshot["available_actions"] = self.validator.available_actions(
             self.micro.state
         )
-        self.micro.state.cash = original_cash  # restore
 
         occ_name = ""
         tier_name = ""

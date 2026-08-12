@@ -31,6 +31,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 from wealthsandbox import WealthSandBoxEnv, EnvConfig
 from wealthsandbox.agents import LLMAgent, Decision, ToolCall
+from wealthsandbox.types import Action, CareerMove
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +63,14 @@ def money(val: float) -> str:
 # Agents
 # ---------------------------------------------------------------------------
 class RandomAgent:
-    """Simple stochastic baseline agent.  Most months does nothing (auto-work)."""
+    """Stochastic baseline agent — randomly selects from all available tools each month.
+
+    Uses the ``available_actions`` dict from the observation to only attempt
+    actions that are currently legal, avoiding wasted rejection months.
+    """
+
+    # Actions that take no arguments (besides None)
+    _NO_ARG_ACTIONS = ["upskill", "intensive_work", "quit_job"]
 
     def __init__(self, seed: int = 42):
         self.rng = random.Random(seed)
@@ -70,30 +78,80 @@ class RandomAgent:
             "software_engineer", "data_scientist", "investment_banker",
             "financial_analyst", "manufacturing_worker", "nurse", "civil_servant",
         ]
+        self._step = 0
 
     def reset(self) -> None:
-        pass
+        self._step = 0
 
     def decide(self, obs) -> Decision:
-        # 60% auto-work (no tool call), 30% switch, 7% upskill, 3% quit
-        choice = self.rng.choices(
-            ["none", "switch", "upskill", "quit"],
-            weights=[0.60, 0.30, 0.07, 0.03],
-        )[0]
-        tool_calls = []
-        if choice == "switch":
-            occ = self.rng.choice(self.occupations)
-            tool_calls.append(
-                ToolCall(
-                    tool_name="switch_occupation",
-                    parameters={"occupation_id": occ},
-                )
-            )
-        elif choice == "upskill":
-            tool_calls.append(ToolCall(tool_name="upskill", parameters={}))
-        elif choice == "quit":
-            tool_calls.append(ToolCall(tool_name="quit_job", parameters={}))
-        return Decision(reasoning="Random agent choice.", tool_calls=tool_calls)
+        self._step += 1
+        ind = obs.individual
+        # Available actions as reported by the validator — only pick from legal ones
+        available = obs.macro.get("available_actions", {})
+        legal = [
+            name for name, info in available.items()
+            if isinstance(info, dict) and info.get("allowed")
+        ]
+        # Filter out "none" — we build that separately
+        legal = [n for n in legal if n != "none"]
+
+        tool_calls: list = []
+        # ~40% of the time, do nothing (auto-work).  Otherwise pick 1–2 random
+        # actions from the legal set.
+        if legal and self.rng.random() > 0.40:
+            # Pick 1–2 distinct actions
+            num = self.rng.choices([1, 2], weights=[0.7, 0.3])[0]
+            picks = self.rng.sample(legal, min(num, len(legal)))
+            for name in picks:
+                if name == "switch_occupation":
+                    occ = self.rng.choice(self.occupations)
+                    tool_calls.append(ToolCall(
+                        tool_name="switch_occupation",
+                        parameters={"occupation_id": occ},
+                    ))
+                elif name == "deposit":
+                    cash = ind.get("cash", 0)
+                    # Deposit a random fraction of cash above $2,000 buffer
+                    max_deposit = max(0, cash - 2_000)
+                    if max_deposit > 0:
+                        amount = round(self.rng.uniform(100, max_deposit), 2)
+                        tool_calls.append(ToolCall(
+                            tool_name="deposit",
+                            parameters={"amount": amount},
+                        ))
+                elif name == "withdraw":
+                    savings = ind.get("savings", 0)
+                    if savings > 0:
+                        amount = round(self.rng.uniform(10, savings), 2)
+                        tool_calls.append(ToolCall(
+                            tool_name="withdraw",
+                            parameters={"amount": amount},
+                        ))
+                elif name == "borrow":
+                    income = ind.get("monthly_after_tax_income", 0)
+                    limit = max(8_000, income * 12)
+                    amount = round(self.rng.uniform(500, max(1_000, limit * 0.5)), 2)
+                    tool_calls.append(ToolCall(
+                        tool_name="borrow",
+                        parameters={"amount": amount},
+                    ))
+                elif name == "repay":
+                    loan = ind.get("loan_balance", 0)
+                    cash = ind.get("cash", 0)
+                    if loan > 0 and cash > 0:
+                        amount = round(self.rng.uniform(10, min(cash, loan)), 2)
+                        tool_calls.append(ToolCall(
+                            tool_name="repay",
+                            parameters={"amount": amount},
+                        ))
+                elif name in self._NO_ARG_ACTIONS:
+                    tool_calls.append(ToolCall(tool_name=name, parameters={}))
+
+        reason = ", ".join(tc.tool_name for tc in tool_calls) if tool_calls else "none"
+        return Decision(
+            reasoning=f"[step {self._step}] random choices: {reason}",
+            tool_calls=tool_calls,
+        )
 
 
 class MockAgent:
@@ -431,6 +489,36 @@ class TrajectoryWriter:
 
 
 # ---------------------------------------------------------------------------
+# Persona profile loader
+# ---------------------------------------------------------------------------
+PROFILES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "profiles")
+
+
+def _load_persona(profile_name: Optional[str]) -> str:
+    """Load a persona markdown file from the profiles/ directory.
+
+    Args:
+        profile_name: Short name without extension (e.g. ``"ambitious"``).
+            If ``None`` or empty, returns an empty string (no persona).
+
+    Returns:
+        The file contents as a string, or ``""`` if the profile is not found
+        or not specified.
+    """
+    if not profile_name:
+        return ""
+    # Support both "ambitious" and "ambitious.md"
+    fname = profile_name if profile_name.endswith(".md") else f"{profile_name}.md"
+    path = os.path.join(PROFILES_DIR, fname)
+    if not os.path.isfile(path):
+        print(f"Warning: profile '{profile_name}' not found at {path}", file=sys.stderr)
+        return ""
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read().strip()
+
+
+
+# ---------------------------------------------------------------------------
 # Main runner
 # ---------------------------------------------------------------------------
 def build_agent(args, config=None) -> object:
@@ -438,6 +526,26 @@ def build_agent(args, config=None) -> object:
         from wealthsandbox.agents.llm_agent import _build_system_prompt
         from wealthsandbox.systems.career import DEFAULT_OCCUPATIONS
         profile = config.profile if config else None
+
+        # Load persona profile from file (if specified)
+        persona = _load_persona(getattr(args, "profile", None))
+
+        # Build occupation details dict for dynamic tool descriptions
+        occupation_details = {
+            occ_id: {
+                "industry": occ.industry,
+                "base_monthly_salary": occ.base_monthly_salary,
+                "entry_cost": occ.entry_cost,
+                "training_months": occ.training_months,
+                "min_general_skill": occ.min_general_skill,
+                "min_health": occ.min_health,
+                "tiers": [
+                    {"name": t.name, "salary_multiplier": t.salary_multiplier}
+                    for t in occ.tiers
+                ],
+            }
+            for occ_id, occ in DEFAULT_OCCUPATIONS.items()
+        }
         prompt = _build_system_prompt(
             profile=profile,
             end_age=config.end_age if config else 60,
@@ -451,21 +559,10 @@ def build_agent(args, config=None) -> object:
             energy_cost_per_upskill=config.energy_cost_per_upskill if config else 0.4,
             intensive_work_months=config.intensive_work_months if config else 3,
             occ_skill_passive_months=config.occ_skill_passive_months if config else 12,
+            energy_recovery_per_month=config.energy_recovery_per_month if config else 0.10,
+            occupations=occupation_details,
+            persona=persona,
         )
-        # Build occupation details dict for dynamic tool descriptions
-        occupation_details = {
-            occ_id: {
-                "entry_cost": occ.entry_cost,
-                "training_months": occ.training_months,
-                "min_general_skill": occ.min_general_skill,
-                "min_health": occ.min_health,
-                "tiers": [
-                    {"name": t.name, "salary_multiplier": t.salary_multiplier}
-                    for t in occ.tiers
-                ],
-            }
-            for occ_id, occ in DEFAULT_OCCUPATIONS.items()
-        }
         return LLMAgent(
             model=args.model or os.getenv("DEFAULT_MODEL", "gpt-4.1-mini"),
             temperature=0.7,
@@ -478,6 +575,7 @@ def build_agent(args, config=None) -> object:
             switch_base_cost=config.switch_occupation_base_cost if config else 2_000.0,
             energy_threshold_for_upskill=config.energy_threshold_for_upskill if config else 0.4,
             occupations=occupation_details,
+            persona=persona,
         )
     elif args.agent == "random":
         return RandomAgent(seed=args.seed)
@@ -538,6 +636,12 @@ def main() -> int:
         type=str,
         default="",
         help="Specific cycle CSV, e.g. '2008_2009.csv'. Overrides --macro-cycle.",
+    )
+    parser.add_argument(
+        "--profile",
+        type=str,
+        default=None,
+        help="Agent persona profile to load from profiles/ directory (e.g. 'ambitious', 'cautious').",
     )
     parser.add_argument(
         "--save",
@@ -620,6 +724,7 @@ def main() -> int:
         "seed": args.seed,
         "macro_cycle": args.macro_cycle or "random",
         "macro_cycle_file": getattr(env.macro, "current_cycle_file", ""),
+        "profile": getattr(args, "profile", None),
     }
     writer = TrajectoryWriter(jsonl_path, run_meta=run_meta)
     writer.write_header(env, initial_state, system_prompt=system_prompt)
@@ -635,40 +740,40 @@ def main() -> int:
         print_step_header(months_completed + 1, obs.year, obs.month, obs.individual.get("age", 20))
         print_environment_state(obs)
 
-        # ---- Retry loop: agent can retry within the same month ----
+        # ---- Single decision + retry on rejection -------------------------
         retries = 0
+        month_decision = None
         while retries < MAX_RETRIES:
             decision = agent.decide(obs)
             print_agent_decision(decision)
+
             obs, reward, done, info = env.step(tool_calls=decision.tool_calls)
 
             if done:
-                total_reward += reward
-                months_completed += 1
-                writer.append_step(decision, env.history[-1])
+                month_decision = decision
                 break
 
-            if not info.get("action_rejected"):
-                # Action accepted (or NONE) — month concluded
-                total_reward += reward
-                months_completed += 1
-                writer.append_step(decision, env.history[-1])
-                break
-
-            # Rejected — show feedback and retry
-            retries += 1
-            rejection_msg = info.get("rejection_message", "unknown reason")
-            if retries < MAX_RETRIES:
-                print(f"\n  {C.YELLOW}⚠️  Rejected — retrying ({retries}/{MAX_RETRIES}): {rejection_msg}{C.RESET}")
+            if info.get("action_rejected"):
+                retries += 1
+                rejection_msg = info.get("rejection_message", "unknown reason")
+                if retries < MAX_RETRIES:
+                    print(f"\n  {C.YELLOW}⚠️  Rejected — retrying ({retries}/{MAX_RETRIES}): {rejection_msg}{C.RESET}")
+                else:
+                    print(f"\n  {C.RED}⚠️  Max retries ({MAX_RETRIES}) exceeded — forcing NONE this month{C.RESET}")
+                    # Force NONE to avoid wasting the month
+                    obs, reward, done, info = env.step(action=Action(career_move=CareerMove.NONE))
+                    decision = Decision(reasoning="(forced NONE after max retries)", tool_calls=[])
+                    break
             else:
-                print(f"\n  {C.RED}⚠️  Max retries ({MAX_RETRIES}) exceeded — forcing auto-work this month{C.RESET}")
-                # Force NONE to conclude the month
-                obs, reward, done, info = env.step(tool_calls=[])
-                fallback = Decision(reasoning="(forced auto-work after max retries)", tool_calls=[])
-                total_reward += reward
-                months_completed += 1
-                writer.append_step(fallback, env.history[-1])
-                break
+                month_decision = decision
+                break  # success
+        else:
+            # Should not reach here, but guard
+            month_decision = Decision(reasoning="(no decision)", tool_calls=[])
+
+        total_reward += reward
+        months_completed += 1
+        writer.append_step(month_decision, env.history[-1])
 
         if done:
             termination_reason = info.get("termination_reason", "")

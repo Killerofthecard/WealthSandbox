@@ -9,7 +9,7 @@ from wealthsandbox.config import TAX_RATE, UPSKILL_MONTHS
 class TestCareerSystem(unittest.TestCase):
 
     def setUp(self):
-        self.sys = CareerSystem()
+        self.sys = CareerSystem(seed=0, layoff_base_rate=0.0)  # deterministic, no layoff in tests
 
     # --- Registry ---
 
@@ -21,7 +21,7 @@ class TestCareerSystem(unittest.TestCase):
     def test_get_occupation(self):
         occ = self.sys.get_occupation("software_engineer")
         self.assertEqual(occ.industry, "tech")
-        self.assertEqual(occ.base_monthly_salary, 6_500.0)
+        self.assertEqual(occ.base_monthly_salary, 8_800.0)
         self.assertEqual(occ.skill_sensitivity, 0.06)
         self.assertGreater(len(occ.tiers), 0)
 
@@ -59,7 +59,7 @@ class TestCareerSystem(unittest.TestCase):
         ref = self.sys.get_monthly_base_salary(state_ref)
         high = self.sys.get_monthly_base_salary(state_high)
 
-        self.assertAlmostEqual(ref, 6_500.0, delta=1)
+        self.assertAlmostEqual(ref, 8_800.0, delta=1)
         self.assertLess(low, ref)
         self.assertGreater(high, ref)
 
@@ -76,7 +76,7 @@ class TestCareerSystem(unittest.TestCase):
         )
         self.sys.tick(state, {})
         income = self.sys.compute_monthly_after_tax_income(state)
-        expected = 6500.0 * (1 - TAX_RATE)
+        expected = 8800.0 * (1 - TAX_RATE)
         self.assertAlmostEqual(income, round(expected, 2), delta=0.1)
 
     # --- Tick (auto income) ---
@@ -205,7 +205,7 @@ class TestCareerSystem(unittest.TestCase):
         self.sys.process_switch_occupation(state, "manufacturing_worker")
         self.assertEqual(state.occupation_id, "manufacturing_worker")
         self.assertEqual(state.job_status, JobStatus.EMPLOYED)
-        self.assertLess(state.cash, 10_000.0)
+        self.assertEqual(state.cash, 10_000.0)  # safety-net job — always free
         self.assertEqual(state.general_skill, 5)  # first job: 100% retention
 
     def test_process_switch_occupation_starts_training(self):
@@ -314,7 +314,7 @@ class TestCareerSystem(unittest.TestCase):
         details = self.sys.get_occupation_details()
         sw = details["software_engineer"]
         self.assertEqual(sw["min_general_skill"], 4)
-        self.assertEqual(sw["entry_cost"], 8_000.0)
+        self.assertEqual(sw["entry_cost"], 10_000.0)
         self.assertEqual(sw["training_months"], 4)
         self.assertGreater(len(sw["tiers"]), 0)
 
@@ -473,7 +473,7 @@ class TestEnergySystem(unittest.TestCase):
     def test_energy_recovered_when_not_training(self):
         s = self._state(energy=0.5, training=0)
         self.es.tick(s, {})
-        self.assertAlmostEqual(s.energy, 0.52)
+        self.assertAlmostEqual(s.energy, 0.60)
 
 
 if __name__ == "__main__":

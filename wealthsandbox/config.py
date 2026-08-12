@@ -92,7 +92,7 @@ class EnvConfig:
     energy_cost_per_upskill: float = 0.4          # one-time deduction when starting upskill
     energy_cost_per_intensive_work: float = 0.5   # one-time deduction when starting intensive work
     energy_decline_per_training_month: float = 0.15  # drain per month while training
-    energy_recovery_per_month: float = 0.02        # recovery per month when not training
+    energy_recovery_per_month: float = 0.10        # recovery per month when not training
     energy_threshold_for_upskill: float = 0.4      # minimum energy to start upskill / intensive work
 
     # ---- occupation skill (within-career progression) ----

@@ -20,8 +20,12 @@ SWITCH_OCCUPATION = "switch_occupation"
 UPSKILL = "upskill"
 INTENSIVE_WORK = "intensive_work"
 QUIT_JOB = "quit_job"
+DEPOSIT = "deposit"
+WITHDRAW = "withdraw"
+BORROW = "borrow"
+REPAY = "repay"
 
-ALL_TOOL_NAMES = {SWITCH_OCCUPATION, UPSKILL, INTENSIVE_WORK, QUIT_JOB}
+ALL_TOOL_NAMES = {SWITCH_OCCUPATION, UPSKILL, INTENSIVE_WORK, QUIT_JOB, DEPOSIT, WITHDRAW, BORROW, REPAY}
 
 
 # ---------------------------------------------------------------------------
@@ -116,6 +120,79 @@ def build_tools(
                 "name": "quit_job",
                 "description": quit_job_desc,
                 "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "deposit",
+                "description": (
+                    f"Deposit cash into your bank savings account.  Earns "
+                    f"monthly interest at the federal funds rate / 12.  "
+                    f"Must keep ≥${living_expense:,.0f} cash after deposit.  "
+                    f"Example: deposit(amount=3000)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "amount": {"type": "number", "description": "Amount to deposit."},
+                    },
+                    "required": ["amount"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "withdraw",
+                "description": (
+                    f"Withdraw from your bank savings account.  "
+                    f"Example: withdraw(amount=2000)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "amount": {"type": "number", "description": "Amount to withdraw."},
+                    },
+                    "required": ["amount"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "borrow",
+                "description": (
+                    f"Take a bank loan.  Loan limit = 12 × income if employed, "
+                    f"$8,000 if unemployed.  Interest charged "
+                    f"monthly at (federal funds rate + 2%) / 12.  Example: "
+                    f"borrow(amount=5000)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "amount": {"type": "number", "description": "Amount to borrow."},
+                    },
+                    "required": ["amount"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "repay",
+                "description": (
+                    f"Repay part or all of your bank loan.  "
+                    f"Example: repay(amount=2000).  Repaying the full "
+                    f"balance stops further interest charges."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "amount": {"type": "number", "description": "Amount to repay."},
+                    },
+                    "required": ["amount"],
+                },
             },
         },
         {

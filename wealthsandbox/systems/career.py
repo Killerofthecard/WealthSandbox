@@ -66,48 +66,59 @@ class Occupation:
 # ---------------------------------------------------------------------------
 # Default occupation registry
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Calibration anchor: BLS OEWS May 2025 National
+#   base_monthly = P25 annual ÷ 12  (entry / tier-0 salary)
+#   tier multiplier(k) = P(k) ÷ P25  where k ∈ {P25, P50, P75, P90}
+#   (except manufacturing_worker and civil_servant: median-based rough
+#    estimates — P25 data unavailable for these SOC aggregates)
+# ---------------------------------------------------------------------------
 DEFAULT_OCCUPATIONS: Dict[str, Occupation] = {
     occ.occupation_id: occ
     for occ in [
+        # SOC 15-1252 — P25~$105,600  P50~$142,900  P75~$184,200  P90~$225,300
         Occupation(
             occupation_id="software_engineer",
             industry="tech",
             display_name="Software Engineer",
-            base_monthly_salary=6_500.0,
+            base_monthly_salary=8_800.0,
             skill_sensitivity=0.06,
             min_general_skill=4,
             min_health=0.3,
-            entry_cost=8_000.0,
+            entry_cost=10_000.0,
             training_months=4,
             tiers=(
                 Tier("Junior",      min_occ_skill=1, min_tenure_months=0,  salary_multiplier=1.0),
-                Tier("Mid-level",   min_occ_skill=4, min_tenure_months=18, salary_multiplier=1.5),
-                Tier("Senior",      min_occ_skill=7, min_tenure_months=48, salary_multiplier=2.2),
-                Tier("Principal",   min_occ_skill=9, min_tenure_months=96, salary_multiplier=3.5),
+                Tier("Mid-level",   min_occ_skill=3, min_tenure_months=18, salary_multiplier=1.35),
+                Tier("Senior",      min_occ_skill=6, min_tenure_months=48, salary_multiplier=1.74),
+                Tier("Principal",   min_occ_skill=9, min_tenure_months=96, salary_multiplier=2.13),
             ),
         ),
+        # SOC 15-2051 — P25 $85,660  P50 $120,230  P75 $158,880  P90 $199,130
         Occupation(
             occupation_id="data_scientist",
             industry="tech",
             display_name="Data Scientist",
-            base_monthly_salary=6_800.0,
+            base_monthly_salary=7_100.0,
             skill_sensitivity=0.06,
             min_general_skill=4,
             min_health=0.3,
-            entry_cost=8_000.0,
+            entry_cost=10_000.0,
             training_months=4,
             tiers=(
                 Tier("Junior",      min_occ_skill=1, min_tenure_months=0,  salary_multiplier=1.0),
-                Tier("Mid-level",   min_occ_skill=4, min_tenure_months=18, salary_multiplier=1.5),
-                Tier("Senior",      min_occ_skill=7, min_tenure_months=48, salary_multiplier=2.2),
-                Tier("Principal",   min_occ_skill=9, min_tenure_months=96, salary_multiplier=3.5),
+                Tier("Mid-level",   min_occ_skill=3, min_tenure_months=18, salary_multiplier=1.40),
+                Tier("Senior",      min_occ_skill=6, min_tenure_months=48, salary_multiplier=1.85),
+                Tier("Principal",   min_occ_skill=9, min_tenure_months=96, salary_multiplier=2.33),
             ),
         ),
+        # SOC 41-3031 — P25~$58,000  P50 $78,660  P75~$115,000  P90 $212,880
+        # Mean $109,150 used to anchor mid-career; steep ladder from right-skew
         Occupation(
             occupation_id="investment_banker",
             industry="finance",
             display_name="Investment Banker",
-            base_monthly_salary=7_500.0,
+            base_monthly_salary=6_500.0,
             skill_sensitivity=0.05,
             min_general_skill=5,
             min_health=0.4,
@@ -115,16 +126,17 @@ DEFAULT_OCCUPATIONS: Dict[str, Occupation] = {
             training_months=6,
             tiers=(
                 Tier("Analyst",     min_occ_skill=1, min_tenure_months=0,  salary_multiplier=1.0),
-                Tier("Associate",   min_occ_skill=4, min_tenure_months=24, salary_multiplier=1.6),
-                Tier("VP",          min_occ_skill=7, min_tenure_months=60, salary_multiplier=2.5),
-                Tier("MD",          min_occ_skill=9, min_tenure_months=120,salary_multiplier=4.0),
+                Tier("Associate",   min_occ_skill=4, min_tenure_months=24, salary_multiplier=1.40),
+                Tier("VP",          min_occ_skill=7, min_tenure_months=60, salary_multiplier=2.10),
+                Tier("MD",          min_occ_skill=9, min_tenure_months=120,salary_multiplier=2.73),
             ),
         ),
+        # SOC 13-2051 — P25~$78,500  P50 $102,740  P75~$133,100  P90~$174,300
         Occupation(
             occupation_id="financial_analyst",
             industry="finance",
             display_name="Financial Analyst",
-            base_monthly_salary=5_500.0,
+            base_monthly_salary=6_500.0,
             skill_sensitivity=0.05,
             min_general_skill=3,
             min_health=0.3,
@@ -132,11 +144,13 @@ DEFAULT_OCCUPATIONS: Dict[str, Occupation] = {
             training_months=3,
             tiers=(
                 Tier("Junior",      min_occ_skill=1, min_tenure_months=0,  salary_multiplier=1.0),
-                Tier("Mid-level",   min_occ_skill=3, min_tenure_months=12, salary_multiplier=1.4),
-                Tier("Senior",      min_occ_skill=6, min_tenure_months=36, salary_multiplier=1.9),
-                Tier("Lead",        min_occ_skill=8, min_tenure_months=72, salary_multiplier=2.5),
+                Tier("Mid-level",   min_occ_skill=3, min_tenure_months=12, salary_multiplier=1.31),
+                Tier("Senior",      min_occ_skill=6, min_tenure_months=36, salary_multiplier=1.70),
+                Tier("Lead",        min_occ_skill=8, min_tenure_months=72, salary_multiplier=2.22),
             ),
         ),
+        # SOC 51-0000 — Median ~$46,000  (P25 estimate ~$35,000; low confidence)
+        # Using median-based anchor — safety-net job, kept stable
         Occupation(
             occupation_id="manufacturing_worker",
             industry="manufacturing",
@@ -149,16 +163,17 @@ DEFAULT_OCCUPATIONS: Dict[str, Occupation] = {
             training_months=0,
             tiers=(
                 Tier("Apprentice",  min_occ_skill=1, min_tenure_months=0,  salary_multiplier=1.0),
-                Tier("Skilled",     min_occ_skill=3, min_tenure_months=12, salary_multiplier=1.3),
-                Tier("Supervisor",  min_occ_skill=5, min_tenure_months=36, salary_multiplier=1.7),
-                Tier("Manager",     min_occ_skill=7, min_tenure_months=72, salary_multiplier=2.2),
+                Tier("Skilled",     min_occ_skill=3, min_tenure_months=12, salary_multiplier=1.30),
+                Tier("Supervisor",  min_occ_skill=5, min_tenure_months=36, salary_multiplier=1.70),
+                Tier("Manager",     min_occ_skill=7, min_tenure_months=72, salary_multiplier=2.20),
             ),
         ),
+        # SOC 29-1141 — P25~$83,000  P50~$100,000  P90~$150,000  (3-tier, compressed)
         Occupation(
             occupation_id="nurse",
             industry="healthcare",
             display_name="Nurse",
-            base_monthly_salary=5_200.0,
+            base_monthly_salary=6_900.0,
             skill_sensitivity=0.04,
             min_general_skill=2,
             min_health=0.5,
@@ -166,15 +181,16 @@ DEFAULT_OCCUPATIONS: Dict[str, Occupation] = {
             training_months=3,
             tiers=(
                 Tier("Staff Nurse", min_occ_skill=1, min_tenure_months=0,  salary_multiplier=1.0),
-                Tier("Senior Nurse",min_occ_skill=4, min_tenure_months=24, salary_multiplier=1.5),
-                Tier("Head Nurse",  min_occ_skill=7, min_tenure_months=60, salary_multiplier=2.0),
+                Tier("Senior Nurse",min_occ_skill=4, min_tenure_months=24, salary_multiplier=1.20),
+                Tier("Head Nurse",  min_occ_skill=7, min_tenure_months=60, salary_multiplier=1.81),
             ),
         ),
+        # SOC 43-0000 proxy — Median ~$47,000  (P25 estimate ~$38,000; low confidence)
         Occupation(
             occupation_id="civil_servant",
             industry="gov",
             display_name="Civil Servant",
-            base_monthly_salary=4_500.0,
+            base_monthly_salary=3_800.0,
             skill_sensitivity=0.03,
             min_general_skill=2,
             min_health=0.3,
@@ -182,8 +198,8 @@ DEFAULT_OCCUPATIONS: Dict[str, Occupation] = {
             training_months=2,
             tiers=(
                 Tier("Junior Officer",  min_occ_skill=1, min_tenure_months=0,  salary_multiplier=1.0),
-                Tier("Senior Officer",  min_occ_skill=4, min_tenure_months=36, salary_multiplier=1.4),
-                Tier("Director",        min_occ_skill=7, min_tenure_months=96, salary_multiplier=2.0),
+                Tier("Senior Officer",  min_occ_skill=4, min_tenure_months=36, salary_multiplier=1.24),
+                Tier("Director",        min_occ_skill=7, min_tenure_months=96, salary_multiplier=1.58),
             ),
         ),
     ]
@@ -432,6 +448,15 @@ class CareerSystem(BaseSystem):
             return
 
         total_cost = self.switch_base_cost + occ.entry_cost
+
+        if target_id == "manufacturing_worker":
+            # Safety-net occupation — always free to join, no cash required.
+            self._apply_occupation_switch(state, target_id)
+            state.last_month_events.append(
+                f"Switched to {occ.display_name} (no cost — safety-net job)."
+            )
+            return
+
         if state.cash < total_cost:
             state.last_month_events.append(
                 f"Cannot afford switch: need ${total_cost:,.0f}, have ${state.cash:,.0f}."
@@ -554,22 +579,42 @@ class CareerSystem(BaseSystem):
             state.last_month_events.append(f"Training completed — now a {occ.display_name}.")
 
     def _apply_occupation_switch(self, state: AgentState, target_id: str) -> None:
-        """Internal: apply occupation switch with general_skill retention.
+        """Apply occupation switch with skill retention (both general and occupation).
 
-        Occupation skill is NOT carried — starts fresh at 1.
+        General skill carries over by industry proximity.
+        Occupation skill: if switching back to a previously worked occupation,
+        the saved skill is restored (× industry proximity retention).  First
+        time in an occupation always starts at tier 0's min_skill.
         """
         from_id = state.occupation_id
+
+        # ---- General skill transfer ----
         old_gen = state.general_skill
         retention = self.get_skill_retention(from_id, target_id)
         state.general_skill = max(1, int(old_gen * retention))
+
         state.occupation_id = target_id
         state.job_status = JobStatus.EMPLOYED
         state.tenure_months = 0
         state.current_tier = 0
-        # Initialize occupation skill for the new occupation
+
+        # ---- Occupation skill: restore previous experience or start fresh ----
         occ = self.get_occupation(target_id)
-        init_occ = occ.tiers[0].min_occ_skill if occ.tiers else 1
-        state.occupation_skills[target_id] = init_occ
+        floor = occ.tiers[0].min_occ_skill if occ.tiers else 1
+
+        prev_skill = state.occupation_skills.get(target_id)
+        if prev_skill is not None and prev_skill > floor:
+            # Returning to a previously worked occupation — restore with retention
+            retained = max(floor, int(prev_skill * retention))
+            state.occupation_skills[target_id] = retained
+            state.last_month_events.append(
+                f"Occupation skill restored: {prev_skill} → {retained} "
+                f"(previously worked here, {retention:.0%} retention)."
+            )
+        else:
+            # Fresh occupation or skill already at floor — start clean
+            state.occupation_skills[target_id] = floor
+
         state.last_month_events.append(
             f"General skill transferred: {old_gen} → {state.general_skill} "
             f"({retention:.0%} retention, cross-industry)."
@@ -639,11 +684,19 @@ class CareerSystem(BaseSystem):
     # ------------------------------------------------------------------
 
     def _gain_occ_skill(self, state: AgentState, amount: int) -> None:
-        """Add *amount* occupation skill points for the current occupation."""
-        if not state.occupation_id:
+        """Add *amount* occupation skill points.
+
+        If the agent is currently employed the skill goes to the current
+        occupation.  If the agent was laid off / forced to resign earlier in
+        this same tick, the skill goes to the previous occupation instead
+        (the intensive work was already in progress — the agent still learns
+        from it).
+        """
+        occ_id = state.occupation_id or state.prev_occupation_id
+        if not occ_id:
             return
-        cur = state.occupation_skills.get(state.occupation_id, 1)
-        state.occupation_skills[state.occupation_id] = min(
+        cur = state.occupation_skills.get(occ_id, 1)
+        state.occupation_skills[occ_id] = min(
             self.max_occ_skill, cur + amount
         )
 
@@ -687,8 +740,10 @@ class CareerSystem(BaseSystem):
         state.intensive_work_months_remaining -= 1
         if state.intensive_work_months_remaining == 0:
             self._gain_occ_skill(state, 1)
+            occ_id = state.occupation_id or state.prev_occupation_id
+            skill = state.occupation_skills.get(occ_id, 1) if occ_id else 1
             state.last_month_events.append(
-                f"Intensive work completed — occupation skill now {self._occ_skill(state)}."
+                f"Intensive work completed — occupation skill now {skill}."
             )
 
     # ------------------------------------------------------------------

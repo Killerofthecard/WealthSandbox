@@ -33,6 +33,7 @@ class MacroLayer:
         # Current values (consumed by CareerSystem)
         self.unrate: float = 0.05      # decimal (e.g. 0.054 = 5.4%)
         self.usrecm: int = 0           # 0 or 1
+        self.fedfunds: float = 3.0     # % (e.g. 5.25 = 5.25%)
 
         # Which cycles are being used
         self.current_cycle_label: str = ""
@@ -43,7 +44,7 @@ class MacroLayer:
         self._cycle_override: str = config.macro_cycle  # "" = random
         self._file_override: str = config.macro_cycle_file  # specific CSV file
         self._rng = random.Random(config.seed if config.seed is not None else 42)
-        self._rows: List[Tuple[int, int, float, int]] = []  # (year, month, unrate, usrecm)
+        self._rows: List[Tuple[int, int, float, int, float]] = []  # (year, month, unrate, usrecm, fedfunds)
         self._row_idx: int = 0
 
         self._load_next_cycle()
@@ -65,12 +66,12 @@ class MacroLayer:
             self.year += 1
 
         if self._row_idx < len(self._rows):
-            _, _, self.unrate, self.usrecm = self._rows[self._row_idx]
+            _, _, self.unrate, self.usrecm, self.fedfunds = self._rows[self._row_idx]
             self._row_idx += 1
         else:
             self._load_next_cycle()
             if self._rows:
-                _, _, self.unrate, self.usrecm = self._rows[0]
+                _, _, self.unrate, self.usrecm, self.fedfunds = self._rows[0]
                 self._row_idx = 1
 
         return self.snapshot()
@@ -83,6 +84,7 @@ class MacroLayer:
             "total_months": self._month_counter,
             "unrate": self.unrate,
             "usrecm": self.usrecm,
+            "fedfunds": self.fedfunds,
         }
 
     def reset(self) -> None:
@@ -92,6 +94,7 @@ class MacroLayer:
         self._row_idx = 0
         self.unrate = 0.05
         self.usrecm = 0
+        self.fedfunds = 3.0
         self._load_next_cycle()
 
     # ------------------------------------------------------------------
@@ -152,9 +155,12 @@ class MacroLayer:
         if path:
             with open(path, "r", encoding="utf-8") as f:
                 for row in csv.DictReader(f):
+                    ff_str = row.get("FEDFUNDS", "").strip()
+                    fedfunds = float(ff_str) if ff_str else 3.0
                     self._rows.append((
                         int(row["year"]),
                         int(row["month"]),
                         float(row["UNRATE"]) / 100.0,
                         int(row["USREC"]),
+                        fedfunds,
                     ))

@@ -82,22 +82,22 @@ class TestWealthSandBoxEnv(unittest.TestCase):
     def test_apply_tool_calls_quit(self):
         from wealthsandbox.agents.tools import ToolCall
         tcs = [ToolCall(tool_name="quit_job", parameters={})]
-        action = WealthSandBoxEnv.apply_tool_calls(tcs)
-        self.assertEqual(action.career_move, CareerMove.QUIT_JOB)
+        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        self.assertEqual(actions[0].career_move, CareerMove.QUIT_JOB)
 
     def test_apply_tool_calls_switch(self):
         from wealthsandbox.agents.tools import ToolCall
         tcs = [ToolCall(tool_name="switch_occupation",
                          parameters={"occupation_id": "nurse"})]
-        action = WealthSandBoxEnv.apply_tool_calls(tcs)
-        self.assertEqual(action.career_move, CareerMove.SWITCH_OCCUPATION)
-        self.assertEqual(action.target_occupation_id, "nurse")
+        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        self.assertEqual(actions[0].career_move, CareerMove.SWITCH_OCCUPATION)
+        self.assertEqual(actions[0].target_occupation_id, "nurse")
 
     def test_apply_tool_calls_upskill(self):
         from wealthsandbox.agents.tools import ToolCall
         tcs = [ToolCall(tool_name="upskill", parameters={})]
-        action = WealthSandBoxEnv.apply_tool_calls(tcs)
-        self.assertEqual(action.career_move, CareerMove.UPSKILL)
+        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        self.assertEqual(actions[0].career_move, CareerMove.UPSKILL)
 
     # ------------------------------------------------------------------
     # In-month retry (action rejected → retry without consuming the month)
@@ -163,18 +163,7 @@ class TestWealthSandBoxEnv(unittest.TestCase):
         self.assertEqual(env.macro.total_months, months_before + 1)
 
     def test_tick_runs_only_once_across_retries(self):
-        """Income should be added only once, even if agent retries multiple times.
-
-        Scenario:
-        1. Month 1: get a job (manufacturing_worker) — costs $2,000 to switch,
-           $0 income (was unemployed during tick), -$2,000 living.
-           → cash = $5,000 - $2,000 - $2,000 = $1,000
-        2. Month 2: try to upskill → rejected (need $5,000, only have ~$4,036
-           after tick adds income). Then retry NONE.
-           → After month: cash = $1,000 + $3,036 (one income) - $2,000 = $2,036
-
-        If tick ran twice, cash would be ~$5,072 instead.
-        """
+        """Income should be added only once per month."""
         env = WealthSandBoxEnv(EnvConfig(seed=1))
         env.reset(seed=1)
 
@@ -183,21 +172,12 @@ class TestWealthSandBoxEnv(unittest.TestCase):
             career_move=CareerMove.SWITCH_OCCUPATION,
             target_occupation_id="manufacturing_worker",
         ))
-        self.assertEqual(env.micro.state.cash, 1000.0)  # 5000 - 2000 - 2000
+        cash_after_month1 = env.micro.state.cash
 
-        # Month 2: try to upskill (will be rejected — only $1,000 + upcoming income)
-        obs, reward, done, info = env.step(action=Action(career_move=CareerMove.UPSKILL))
-        self.assertTrue(info.get("action_rejected"))
-        self.assertIn("Insufficient cash", info.get("rejection_message", ""))
-
-        # Retry with NONE — conclude the month
-        obs, reward, done, info = env.step(action=Action(career_move=CareerMove.NONE))
-        self.assertFalse(info.get("action_rejected"))
-
-        # Cash should reflect ONE month's income, not two.
-        # The exact amount depends on the macro industry multiplier, but the
-        # invariant is: cash = 1000 + one_income - 2000 (living).
-        expected = 1000.0 + env.micro.state.monthly_after_tax_income - 2000.0
+        # Month 2: auto-work
+        _, _, _, _ = env.step(action=Action(career_move=CareerMove.NONE))
+        income = env.micro.state.monthly_after_tax_income
+        expected = cash_after_month1 + income - 2000.0
         self.assertAlmostEqual(env.micro.state.cash, expected, places=2)
 
     def test_rejection_events_preserved_on_retry(self):
@@ -237,6 +217,89 @@ class TestWealthSandBoxEnv(unittest.TestCase):
             target_occupation_id="manufacturing_worker",
         ))
         self.assertEqual(len(env.history), 1)  # now 1
+
+    # --- Bank amount validation triggers rejection (Bug 2 fix) ---
+
+    def test_deposit_amount_zero_rejected(self):
+        """deposit(amount=0) should trigger an action rejection."""
+        env = WealthSandBoxEnv(EnvConfig(seed=1))
+        env.reset(seed=1)
+        # First get a job so we have income and cash
+        env.step(action=Action(
+            career_move=CareerMove.SWITCH_OCCUPATION,
+            target_occupation_id="manufacturing_worker",
+        ))
+        obs, reward, done, info = env.step(action=Action(
+            career_move=CareerMove.DEPOSIT, amount=0,
+        ))
+        self.assertTrue(info.get("action_rejected"))
+        self.assertIn("greater than zero", info.get("rejection_message", "").lower())
+
+    def test_withdraw_amount_zero_rejected(self):
+        """withdraw(amount=0) should trigger an action rejection."""
+        env = WealthSandBoxEnv(EnvConfig(seed=1))
+        env.reset(seed=1)
+        obs, reward, done, info = env.step(action=Action(
+            career_move=CareerMove.WITHDRAW, amount=0,
+        ))
+        self.assertTrue(info.get("action_rejected"))
+
+    def test_borrow_amount_zero_rejected(self):
+        """borrow(amount=0) should trigger an action rejection."""
+        env = WealthSandBoxEnv(EnvConfig(seed=1))
+        env.reset(seed=1)
+        obs, reward, done, info = env.step(action=Action(
+            career_move=CareerMove.BORROW, amount=0,
+        ))
+        self.assertTrue(info.get("action_rejected"))
+
+    def test_repay_amount_zero_rejected(self):
+        """repay(amount=0) should trigger an action rejection."""
+        env = WealthSandBoxEnv(EnvConfig(seed=1))
+        env.reset(seed=1)
+        obs, reward, done, info = env.step(action=Action(
+            career_move=CareerMove.REPAY, amount=0,
+        ))
+        self.assertTrue(info.get("action_rejected"))
+
+    # --- Tick runs after execution, before observation (Bug 1 + timing fix) ---
+
+    def test_tick_runs_after_execution(self):
+        """Observation should include tick effects (income)."""
+        env = WealthSandBoxEnv(EnvConfig(seed=1))
+        env.reset(seed=1)
+        obs, _, _, _ = env.step(action=Action(
+            career_move=CareerMove.SWITCH_OCCUPATION,
+            target_occupation_id="manufacturing_worker",
+        ))
+        # After step: income from tick should be added before observation
+        # Initial cash $10,000 - $0 switch - $2,000 expenses + ~$3,230 income
+        self.assertGreater(obs.individual["cash"], 10_000)
+        self.assertGreater(obs.individual["monthly_after_tax_income"], 0)
+
+    def test_retry_does_not_duplicate_tick(self):
+        """Retry after rejection should NOT cause tick to run twice for the same month."""
+        env = WealthSandBoxEnv(EnvConfig(seed=1))
+        env.reset(seed=1)
+        cash_before = env.micro.state.cash
+        health_before = env.micro.state.health
+
+        # Rejected: deposit(amount=0) — agent is unemployed, deposit denied by guard
+        env.step(action=Action(career_move=CareerMove.DEPOSIT, amount=0))
+        # In new flow, rejection returns before tick AND finalize — nothing changes.
+        self.assertEqual(env.micro.state.cash, cash_before)
+        self.assertEqual(env.micro.state.health, health_before)
+        self.assertEqual(len(env.history), 0)  # not archived
+
+        # Valid step: switch to manufacturing_worker
+        env.step(action=Action(
+            career_move=CareerMove.SWITCH_OCCUPATION,
+            target_occupation_id="manufacturing_worker",
+        ))
+        # Tick ran exactly once: income added, expenses deducted
+        self.assertGreater(env.micro.state.cash, cash_before - 2_000)  # income > expenses
+        self.assertLess(env.micro.state.health, health_before)  # health declined once
+        self.assertEqual(len(env.history), 1)  # archived once
 
 
 if __name__ == "__main__":

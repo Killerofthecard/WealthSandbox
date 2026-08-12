@@ -46,6 +46,8 @@ class MicroLayer:
             "health": round(s.health, 3),
             "energy": round(s.energy, 3),
             "cash": round(s.cash, 2),
+            "savings": round(s.savings, 2),
+            "loan_balance": round(s.loan_balance, 2),
             "occupation_id": s.occupation_id,
             "general_skill": s.general_skill,
             "occ_skill": occ_skill,

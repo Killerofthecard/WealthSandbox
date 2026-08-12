@@ -12,6 +12,10 @@ from wealthsandbox.validator import (
     guard_upskill,
     guard_intensive_work,
     guard_quit_job,
+    guard_deposit_amount,
+    guard_withdraw_amount,
+    guard_borrow_amount,
+    guard_repay_amount,
 )
 
 
@@ -168,6 +172,92 @@ class TestGuardFunctions(unittest.TestCase):
         r = guard_quit_job(state, self.career)
         self.assertFalse(r.allowed)
 
+    # --- guard_deposit_amount ---
+
+    def test_deposit_amount_zero_rejected(self):
+        state = AgentState(cash=5_000)
+        r = guard_deposit_amount(state, self.career, 0)
+        self.assertFalse(r.allowed)
+        self.assertIn("greater than zero", r.message.lower())
+
+    def test_deposit_amount_exceeds_cash_rejected(self):
+        state = AgentState(cash=5_000)
+        r = guard_deposit_amount(state, self.career, 6_000)
+        self.assertFalse(r.allowed)
+
+    def test_deposit_amount_buffer_violation_rejected(self):
+        state = AgentState(cash=5_000)
+        r = guard_deposit_amount(state, self.career, 4_000)
+        self.assertFalse(r.allowed)
+        self.assertIn("living expenses", r.message.lower())
+
+    def test_deposit_amount_allowed(self):
+        state = AgentState(cash=5_000)
+        r = guard_deposit_amount(state, self.career, 2_000)
+        self.assertTrue(r.allowed)
+
+    # --- guard_withdraw_amount ---
+
+    def test_withdraw_amount_zero_rejected(self):
+        state = AgentState(savings=3_000)
+        r = guard_withdraw_amount(state, self.career, 0)
+        self.assertFalse(r.allowed)
+        self.assertIn("greater than zero", r.message.lower())
+
+    def test_withdraw_amount_exceeds_savings_rejected(self):
+        state = AgentState(savings=3_000)
+        r = guard_withdraw_amount(state, self.career, 5_000)
+        self.assertFalse(r.allowed)
+
+    def test_withdraw_amount_allowed(self):
+        state = AgentState(savings=3_000)
+        r = guard_withdraw_amount(state, self.career, 2_000)
+        self.assertTrue(r.allowed)
+
+    # --- guard_borrow_amount ---
+
+    def test_borrow_amount_zero_rejected(self):
+        state = AgentState(loan_balance=0)
+        r = guard_borrow_amount(state, self.career, 0)
+        self.assertFalse(r.allowed)
+        self.assertIn("greater than zero", r.message.lower())
+
+    def test_borrow_amount_exceeds_limit_rejected(self):
+        state = AgentState(
+            loan_balance=7_000,
+            job_status=JobStatus.UNEMPLOYED,
+        )
+        r = guard_borrow_amount(state, self.career, 2_000)
+        self.assertFalse(r.allowed)
+
+    def test_borrow_amount_allowed(self):
+        state = AgentState(loan_balance=0, job_status=JobStatus.UNEMPLOYED)
+        r = guard_borrow_amount(state, self.career, 5_000)
+        self.assertTrue(r.allowed)
+
+    # --- guard_repay_amount ---
+
+    def test_repay_amount_zero_rejected(self):
+        state = AgentState(cash=5_000, loan_balance=3_000)
+        r = guard_repay_amount(state, self.career, 0)
+        self.assertFalse(r.allowed)
+        self.assertIn("greater than zero", r.message.lower())
+
+    def test_repay_amount_exceeds_cash_rejected(self):
+        state = AgentState(cash=1_000, loan_balance=3_000)
+        r = guard_repay_amount(state, self.career, 2_000)
+        self.assertFalse(r.allowed)
+
+    def test_repay_amount_exceeds_loan_rejected(self):
+        state = AgentState(cash=5_000, loan_balance=2_000)
+        r = guard_repay_amount(state, self.career, 3_000)
+        self.assertFalse(r.allowed)
+
+    def test_repay_amount_allowed(self):
+        state = AgentState(cash=5_000, loan_balance=3_000)
+        r = guard_repay_amount(state, self.career, 2_000)
+        self.assertTrue(r.allowed)
+
 
 class TestActionValidator(unittest.TestCase):
 
@@ -261,6 +351,56 @@ class TestActionValidator(unittest.TestCase):
         avail = validator.available_actions(state)
         self.assertFalse(avail["upskill"]["allowed"])
         self.assertIn("energy", avail["upskill"]["reason"].lower())
+
+    # --- Bank action-specific validators ---
+
+    def test_validate_deposit_rejects_amount_zero(self):
+        state = AgentState(cash=5_000)
+        action = Action(career_move=CareerMove.DEPOSIT, amount=0)
+        r = self.validator.validate_deposit(action, state)
+        self.assertFalse(r.allowed)
+
+    def test_validate_deposit_allows_valid_amount(self):
+        state = AgentState(cash=5_000)
+        action = Action(career_move=CareerMove.DEPOSIT, amount=3_000)
+        r = self.validator.validate_deposit(action, state)
+        self.assertTrue(r.allowed)
+
+    def test_validate_withdraw_rejects_amount_zero(self):
+        state = AgentState(savings=3_000)
+        action = Action(career_move=CareerMove.WITHDRAW, amount=0)
+        r = self.validator.validate_withdraw(action, state)
+        self.assertFalse(r.allowed)
+
+    def test_validate_withdraw_allows_valid_amount(self):
+        state = AgentState(savings=3_000)
+        action = Action(career_move=CareerMove.WITHDRAW, amount=2_000)
+        r = self.validator.validate_withdraw(action, state)
+        self.assertTrue(r.allowed)
+
+    def test_validate_borrow_rejects_amount_zero(self):
+        state = AgentState(job_status=JobStatus.UNEMPLOYED)
+        action = Action(career_move=CareerMove.BORROW, amount=0)
+        r = self.validator.validate_borrow(action, state)
+        self.assertFalse(r.allowed)
+
+    def test_validate_borrow_allows_valid_amount(self):
+        state = AgentState(job_status=JobStatus.UNEMPLOYED)
+        action = Action(career_move=CareerMove.BORROW, amount=5_000)
+        r = self.validator.validate_borrow(action, state)
+        self.assertTrue(r.allowed)
+
+    def test_validate_repay_rejects_amount_zero(self):
+        state = AgentState(cash=5_000, loan_balance=3_000)
+        action = Action(career_move=CareerMove.REPAY, amount=0)
+        r = self.validator.validate_repay(action, state)
+        self.assertFalse(r.allowed)
+
+    def test_validate_repay_allows_valid_amount(self):
+        state = AgentState(cash=5_000, loan_balance=3_000)
+        action = Action(career_move=CareerMove.REPAY, amount=2_000)
+        r = self.validator.validate_repay(action, state)
+        self.assertTrue(r.allowed)
 
 
 if __name__ == "__main__":

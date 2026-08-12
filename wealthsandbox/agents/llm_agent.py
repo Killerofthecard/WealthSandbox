@@ -39,110 +39,188 @@ def _build_system_prompt(
     tax_rate: float = 0.15,
     energy_threshold: float = 0.4,
     energy_cost_per_upskill: float = 0.4,
+    energy_recovery_per_month: float = 0.10,
     intensive_work_months: int = 3,
     occ_skill_passive_months: int = 12,
+    occupations: Optional[Dict[str, Any]] = None,
+    persona: str = "",
 ) -> str:
-    """Build the system prompt from actual configured costs and profile (no magic numbers)."""
+    """Build the system prompt from actual configured costs and profile (no magic numbers).
+
+    If *occupations* is not provided, falls back to DEFAULT_OCCUPATIONS.
+    If *persona* is provided, it is injected as a ``# Your Persona`` section.
+    """
     if profile is None:
         from wealthsandbox.profile import AgentProfile
         profile = AgentProfile()
     start_age = profile.age
     initial_cash = profile.initial_cash
+    initial_health = profile.initial_health
+    initial_energy = profile.initial_energy
+    initial_gen = profile.initial_general_skill
     total_months = (end_age - start_age) * 12
-    return f"""You are a player in a career simulation called WealthSandBox.
 
-# YOUR OBJECTIVE
+    # ---- Build occupation table dynamically ----
+    if occupations is None:
+        from wealthsandbox.systems.career import DEFAULT_OCCUPATIONS
+        occupations = {
+            occ_id: {
+                "industry": occ.industry,
+                "base_monthly_salary": occ.base_monthly_salary,
+                "min_general_skill": occ.min_general_skill,
+                "min_health": occ.min_health,
+                "entry_cost": occ.entry_cost,
+                "training_months": occ.training_months,
+                "tiers": [
+                    {"name": t.name, "salary_multiplier": t.salary_multiplier}
+                    for t in occ.tiers
+                ],
+            }
+            for occ_id, occ in DEFAULT_OCCUPATIONS.items()
+        }
 
-Maximise your **total net worth** by age {end_age}.  You start at age
-{start_age} — you have **{total_months} months ({total_months // 12} years)**.
+    occ_rows: list[str] = []
+    for occ_id in sorted(occupations.keys()):
+        d = occupations[occ_id]
+        industry = d.get("industry", "?")
+        base = d["base_monthly_salary"]
+        gen_req = d.get("min_general_skill", 1)
+        health_req = d.get("min_health", 0.0)
+        entry = d.get("entry_cost", 0)
+        train = d.get("training_months", 0)
+        tiers = d.get("tiers", [])
+        tier_str = " → ".join(
+            f"{t['name']}×{t['salary_multiplier']}" for t in tiers
+        ) if tiers else "—"
+        occ_rows.append(
+            f"| {occ_id} | {industry} | ${base:,.0f} | {gen_req} | {health_req:.1f} "
+            f"| ${entry:,.0f} | {train}mo | {tier_str} |"
+        )
 
-## ⚠️ RULE #1: DO NOT GO BANKRUPT
+    occ_table: str = "\n".join(occ_rows) if occ_rows else "| — | — | — | — | — | — | — | — |"
 
-Cash ≤ $0 = game over.  Before spending, always check:
-"After this cost + ${living_expense:,.0f} living, is cash still > $0?"
+    # ---- Persona section (only included when a profile is loaded) ----
+    persona_block: str = ""
+    if persona.strip():
+        persona_block = f"""\
+# Your Persona
 
+{persona.strip()}
+
+"""
+
+    return f"""\
+{persona_block}\
 # Game Rules
-- You start at age {start_age}, ${initial_cash:,.0f} cash, unemployed,
-  general_skill 1, full health (1.0), full energy (1.0).
-- Each turn = ONE MONTH.  12 turns = 1 year.
-- Episode ends: age {end_age} (success), cash ≤ $0 (bankruptcy), or health ≤ 0 (death).
-- **Work is automatic.** You earn your salary every month without calling any tool.
-  Call tools only when you want to **change** something.
 
-# Economy Status (shown each turn)
-Each turn you will see a qualitative description of the economy — HEALTHY,
-SLUGGISH, WEAK, or RECESSION.  This affects your income, layoff risk, and
-how easy it is to find a new job.  Use it to guide your decisions:
-- HEALTHY: safe to invest in upskilling, switch jobs.
-- SLUGGISH: proceed with caution, keep some cash buffer.
-- WEAK / RECESSION: conserve cash, avoid unnecessary spending,
-  expect income reductions and possible layoffs.
+You are an agent in a career & life simulation.  Your goal is to maximise
+your **net worth** (cash + savings − loan) by age {end_age}.
 
-# Your State (shown each turn)
-- **Cash** — liquid money.  Reaching $0 = game over.
-- **Health** (0.0–1.0) — declines every month, faster as you age:
-  * 20–29: −0.03%/mo | 30–39: −0.10%/mo | 40–49: −0.30%/mo | 50+: −0.60%/mo
-  * **CRITICAL**: Each occupation has a `min_health` threshold.  If your health
-    drops below it while employed, you will be **FORCED TO RESIGN** at the
-    start of that month.  You must plan your career path to transition into
-    less demanding work BEFORE your health declines too far.
-- **Energy** (0.0–1.0) — upskill costs {energy_cost_per_upskill:.0%}, intensive_work
-  costs {energy_cost_per_upskill:.0%}.  Training drains 15%/mo.  Recovers 2%/mo
-  when resting.  Need ≥{energy_threshold:.0%} to start upskill or intensive_work.
-- **General Skill** (1–{max_general_skill}) — transferable capability.  Gates
-  occupation entry.  Improved via `upskill` (${upskill_cost:,}, {upskill_months} mo).
-- **Occupation Skill** (1–{max_occ_skill} per job) — per-job experience.  Gates
-  tier promotion (Junior → Senior).  Grows passively every {occ_skill_passive_months}
-  months, or faster via `intensive_work` ({intensive_work_months} mo, no cash cost).
-  **NOT carried across occupation switches** — resets to the starting tier.
+You start at age {start_age} — you have {total_months} months.  Each turn is
+**one month** (12 turns = 1 year).
 
-# Income
-- Formula: `base × (1 + sensitivity × (general_skill − 3)) × tier_multiplier`
-- Tax: flat {tax_rate:.0%}.  After-tax = gross × {1 - tax_rate:.2f}.
-- Tier multiplier increases with occupation skill and tenure.
+## How the game ends
+- Age {end_age} → your final net worth is scored.
+- Cash + savings ≤ $0 → **bankruptcy — you lose immediately.**
+- Health ≤ 0 → **death — you lose immediately.**
 
-# Tools (call ONE per month when you need to change)
-| Tool | Cost | Time | What it does |
-|---|---|---|---|
-| `switch_occupation(id)` | ${switch_base_cost:,} + entry | 0–{6} mo training | Switch jobs. General skill carries partially. Occ skill RESETS. |
-| `upskill` | ${upskill_cost:,} + {energy_cost_per_upskill:.0%} energy | {upskill_months} mo | General skill +{upskill_skill_boost}. |
-| `intensive_work` | {energy_cost_per_upskill:.0%} energy (NO cash) | {intensive_work_months} mo | Occ skill +1 in current job. |
-| `quit_job` | None | Immediate | Become unemployed. Income → $0. |
+## Work is automatic
+If you are employed, you earn your salary every month **without calling any
+tool**.  Call tools only when you want to **change** something.
 
-# Skill Transfer on Switch
-  * Same industry → ~80% general_skill retained
-  * Related → ~40% | Unrelated → ~20% | First job → 100%
-  * Industries: tech, finance, healthcare, manufacturing, gov.
+## One shot per month
+Each turn you make exactly ONE response.  In that single response you can
+call **multiple tools at once** — they execute in the order you list them.
+After your tools finish, the month ends (living expenses, health decline,
+etc.) and you won't get another chance until next month.
 
-# Constraints — Action Rejected If:
-1. Cash too low (need action cost + ${living_expense:,.0f} living buffer)
-2. General skill below occupation's min requirement
-3. Health below occupation's min threshold (both for entry AND continued employment)
-4. Energy < {energy_threshold:.0%} (for upskill or intensive_work)
-5. Already training / upskilling / doing intensive work
-6. General skill or occ skill already at max ({max_general_skill}/{max_occ_skill})
-7. Not employed (for quit_job or intensive_work)
-→ Rejected actions show: "⚠️ LAST ACTION REJECTED: <reason>"
+**Think through ALL the tools you need, then call them together.**
+
+## Economy
+Each turn you see an Economy Status: HEALTHY, SLUGGISH, WEAK, or RECESSION.
+This affects your income, layoff risk, and loan interest rates.  In
+recession, conserve cash and expect possible layoffs.
+
+# Monthly Settlement — what happens automatically every month, in order
+
+1. **Income** — if employed, salary is added to cash.
+2. **Layoff check** — small chance of being laid off (higher in recession).
+3. **Your actions** — you call ALL the tools you need this month in ONE
+   response.  After they execute, the month ends.  Plan ahead.
+4. **Living expenses** — ${living_expense:,.0f} deducted from cash (auto-withdrawn from
+   savings if cash runs short).
+5. **Bank interest** — savings earn interest; loan accrues interest, then
+   2% of the loan balance is auto-repaid (min $50).
+6. **Health decline** — health decreases (rate depends on age).
+7. **Bankruptcy / death check** — game ends if cash + savings ≤ $0
+   or health ≤ 0.
+
+You can act between steps 3 and 4.  Plan your borrow / deposit / repay
+decisions knowing that steps 4–7 always follow.
+
+# Your State — what each number means
+
+**Cash** (${initial_cash:,.0f} at start)
+  Spending money.  Living expenses (${living_expense:,.0f}/mo) are deducted
+  from cash automatically.  If cash runs out, savings cover the shortfall.
+
+**Savings** ($0 at start)
+  Bank deposit earning monthly interest (federal funds rate / 12).
+  Not auto-spent — a safety net.
+
+**Loan** ($0 at start)
+  Money you owe the bank.  Interest = (federal funds rate + 2%) / 12 per
+  month.  2% of the balance is auto-repaid each month.  Borrowing limit:
+  12× monthly income if employed, otherwise $8,000.
+
+**Health** ({initial_health:.1f} at start, range 0.0–1.0)
+  Declines every month, faster with age.  Purely passive — you cannot
+  restore it.  If health drops below an occupation's minimum threshold
+  while employed, you are **forced to resign immediately**.
+
+**Energy** ({initial_energy:.1f} at start, range 0.0–1.0)
+  Spent on upskill ({energy_cost_per_upskill:.0%}) and intensive_work
+  ({energy_cost_per_upskill:.0%}).  Drains {15}%/mo during occupation
+  training.  Recovers {energy_recovery_per_month*100:.0f}%/mo when not
+  training.  Need ≥{energy_threshold:.0%} to start upskill or intensive_work.
+
+**General Skill** ({initial_gen} at start, range 1–{max_general_skill})
+  Transferable capability.  Determines which occupations you can enter.
+  Carries across job switches (partially for cross-industry).  Improved
+  via `upskill`.
+
+**Occupation Skill** (0 at start, range 1–{max_occ_skill} per job)
+  Job-specific experience in your current occupation.  Determines your
+  tier (Junior → Senior → …) and salary multiplier.  Grows passively
+  every {occ_skill_passive_months} months, faster via `intensive_work`.
+  **Resets when switching occupations.**
+
+**Tenure** (0 at start)
+  Months spent in your current occupation.  Together with occupation
+  skill, gates tier promotions (automatic).
+
+# Tools — what you can do each month
+
+Call several tools in ONE response.  They run in the order you list them.
+The month ends after they execute — there is no second chance.
+
+| Tool | Effect | Requirements & Cost |
+|---|---|---|
+| `switch_occupation(id)` | Change career.  General skill carries over (same industry ~80%, unrelated ~20%).  Occupation skill resets. | gen_skill ≥ occupation minimum, health ≥ occupation minimum.  **manufacturing_worker is always free** (no cash, no training).  All other jobs: cash ≥ ${switch_base_cost:,} + entry_cost + ${living_expense:,.0f} buffer.  Training 0–6 months (keep working). |
+| `upskill` | General skill +{upskill_skill_boost}.  Unlocks new occupations, boosts salary. | ${upskill_cost:,} cash + {energy_cost_per_upskill:.0%} energy.  {upskill_months} months.  Need ≥${upskill_cost + living_expense:,.0f} cash + ≥{energy_threshold:.0%} energy. |
+| `intensive_work` | Occupation skill +1 in current job.  Accelerates tier promotion. | {energy_cost_per_upskill:.0%} energy (NO cash).  {intensive_work_months} months.  Must be employed, ≥{energy_threshold:.0%} energy. |
+| `quit_job` | Resign immediately.  Income → $0.  Living expenses continue. | Must be employed. |
+| `deposit(amount)` | Cash → savings.  Earns monthly interest. | Keep ≥${living_expense:,.0f} cash.  amount ≤ cash − ${living_expense:,.0f}. |
+| `withdraw(amount)` | Savings → cash.  Instant. | amount ≤ savings balance. |
+| `borrow(amount)` | Take a bank loan.  2% auto-repaid monthly. | Employed limit = 12× income.  Unemployed limit = $8,000. |
+| `repay(amount)` | Repay loan early.  Reduces interest. | amount ≤ cash, amount ≤ loan balance. |
 
 # Available Occupations
-| ID | Industry | Base/mo | Gen≥ | Health≥ | Entry | Train | Tiers (×multiplier) |
-|---|---|---|---|---|---|---|---|
-| software_engineer | tech | $6,500 | 4 | 0.3 | $8,000 | 4mo | Junior×1.0 → Mid×1.5 → Senior×2.2 → Principal×3.5 |
-| data_scientist | tech | $6,800 | 4 | 0.3 | $8,000 | 4mo | Junior×1.0 → Mid×1.5 → Senior×2.2 → Principal×3.5 |
-| investment_banker | finance | $7,500 | 5 | 0.4 | $12,000 | 6mo | Analyst×1.0 → Assoc×1.6 → VP×2.5 → MD×4.0 |
-| financial_analyst | finance | $5,500 | 3 | 0.3 | $5,000 | 3mo | Junior×1.0 → Mid×1.4 → Senior×1.9 → Lead×2.5 |
-| manufacturing_worker | manufacturing | $3,800 | 1 | 0.6 | $0 | 0mo | Apprentice×1.0 → Skilled×1.3 → Supervisor×1.7 → Manager×2.2 |
-| nurse | healthcare | $5,200 | 2 | 0.5 | $4,000 | 3mo | Staff×1.0 → Senior×1.5 → Head×2.0 |
-| civil_servant | gov | $4,500 | 2 | 0.3 | $1,000 | 2mo | Jr Officer×1.0 → Sr Officer×1.4 → Director×2.0 |
 
-# What To Do
-- **Unemployed**: you MUST call switch_occupation to get a job.  Every month
-  unemployed costs you ${living_expense:,.0f} with zero income — you will go
-  bankrupt.  Pick the best occupation you qualify for and can afford.
-- **Employed**: most months call NO tool — you earn automatically.  Call a
-  tool only when you want to upskill, switch jobs, or do intensive work.
-- Always check Legal Actions ✓/✗ before deciding.  If rejected, try something
-  different.
+| ID | Industry | Base/mo | Gen≥ | Health≥ | Entry | Train | Tier ladder (×multiplier) |
+|---|---|---|---|---|---|---|---|
+{occ_table}
+
 """
 
 
@@ -173,6 +251,7 @@ class LLMAgent:
         occ_skill_passive_months: int = 12,
         occupations: Optional[Dict[str, Any]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
+        persona: str = "",
     ):
         self.model = model or os.getenv("DEFAULT_MODEL", "gpt-4.1-mini")
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
@@ -181,7 +260,19 @@ class LLMAgent:
         )
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.system_prompt = system_prompt or _build_system_prompt()
+        self.system_prompt = system_prompt or _build_system_prompt(
+            living_expense=living_expense,
+            upskill_cost=upskill_cost,
+            upskill_months=upskill_months,
+            max_general_skill=max_skill_level,
+            max_occ_skill=max_skill_level,
+            switch_base_cost=switch_base_cost,
+            energy_threshold=energy_threshold_for_upskill,
+            intensive_work_months=intensive_work_months,
+            occ_skill_passive_months=occ_skill_passive_months,
+            occupations=occupations,
+            persona=persona,
+        )
 
         if not self.api_key:
             raise ValueError(
@@ -224,11 +315,20 @@ class LLMAgent:
         self.decision_count = 0
 
     def decide(self, observation: Observation) -> Decision:
-        """Generate a Decision (reasoning + tool calls) from the current Observation."""
+        """Generate a Decision (reasoning + tool calls) from the current Observation.
+
+        Only tools that are currently legal (per the validator) are exposed to
+        the model — it literally cannot call an unavailable action.  The
+        observation text only lists blocked actions and why.
+        """
         user_content = self._format_observation(observation)
         self.messages.append({"role": "user", "content": user_content})
 
-        reasoning, tool_calls = self._call_llm()
+        # Only expose actions that are currently legal.
+        available = observation.macro.get("available_actions", {})
+        legal_tools = self._filter_legal_tools(available)
+
+        reasoning, tool_calls = self._call_llm(tools=legal_tools)
 
         # If the model called a tool but left content empty, synthesise a
         # placeholder so the conversation history isn't corrupted by an
@@ -239,19 +339,6 @@ class LLMAgent:
             reasoning = f"[Called {tc.tool_name}({params})]"
         elif not reasoning.strip():
             reasoning = "[No action — continuing with auto-work.]"
-
-        # --- Last-resort guard: detect reasoning / tool-call contradictions ---
-        # Some smaller models (e.g. gpt-4.1-mini) occasionally write a perfectly
-        # sensible reasoning ("I will not call a tool") but then fire a tool
-        # anyway.  When we detect this we discard the tool call and let the
-        # agent auto-work — the reasoning was correct, the tool call was noise.
-        if tool_calls and _reasoning_says_no_tool(reasoning):
-            discarded = tool_calls[0].tool_name
-            reasoning += (
-                f" [Note: {discarded} was discarded because the reasoning "
-                f"said no tool should be called.]"
-            )
-            tool_calls = []
 
         # Only store the reasoning in conversation history.
         # Tool calls are NOT stored because the environment executes tools
@@ -270,18 +357,25 @@ class LLMAgent:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _call_llm(self) -> tuple[str, List[ToolCall]]:
+    def _call_llm(
+        self, tools: Optional[List[Dict[str, Any]]] = None
+    ) -> tuple[str, List[ToolCall]]:
         """Single API call: model generates reasoning and optional tool call together.
 
         This avoids the inconsistency caused by two-stage calling where the
         model could say "no tool" in Stage 1 but call a tool in Stage 2.
         With a single call the reasoning and tool choice share the same
         generation, so they are inherently consistent.
+
+        Args:
+            tools: Optional filtered tool list.  When None, uses all tools.
+                Callers pass a subset to limit what the agent can invoke this
+                turn (only legal actions).
         """
         kwargs = dict(
             model=self.model,
             messages=self.messages,
-            tools=self.tools,
+            tools=tools if tools is not None else self.tools,
             tool_choice="auto",
             temperature=self.temperature,
         )
@@ -292,17 +386,34 @@ class LLMAgent:
 
         reasoning = message.content or ""
 
-        # Parse at most one tool call (the environment handles one action/month).
+        # Parse all tool calls — the environment handles ordered bundles atomically.
         tool_calls: List[ToolCall] = []
         if message.tool_calls:
-            tc = message.tool_calls[0]
-            try:
-                params = json.loads(tc.function.arguments)
-            except json.JSONDecodeError:
-                params = {}
-            tool_calls.append(ToolCall(tool_name=tc.function.name, parameters=params))
+            for tc in message.tool_calls:
+                try:
+                    params = json.loads(tc.function.arguments)
+                except json.JSONDecodeError:
+                    params = {}
+                tool_calls.append(ToolCall(tool_name=tc.function.name, parameters=params))
 
         return reasoning, tool_calls
+
+    def _filter_legal_tools(
+        self, available_actions: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Return only the tool definitions for actions that are currently legal.
+
+        When ``available_actions`` is empty (e.g. observation built without
+        validator data), fall back to all tools.
+        """
+        if not available_actions:
+            return self.tools
+        legal_names = {
+            name
+            for name, info in available_actions.items()
+            if isinstance(info, dict) and info.get("allowed")
+        }
+        return [t for t in self.tools if t["function"]["name"] in legal_names]
 
     def _format_observation(self, obs: Observation) -> str:
         """Convert an Observation into a natural-language prompt for the LLM."""
@@ -330,6 +441,8 @@ class LLMAgent:
             f"Tenure: {ind.get('tenure_months', 0)} months",
             f"Monthly After-Tax Income: ${ind.get('monthly_after_tax_income', 0):,.2f}",
             f"Cash: ${ind.get('cash', 0):,.2f}",
+            f"Savings: ${ind.get('savings', 0):,.2f}",
+            f"Loan: ${ind.get('loan_balance', 0):,.2f}",
         ]
 
         upskill = ind.get("upskill_months_remaining", 0)
@@ -345,23 +458,28 @@ class LLMAgent:
             target = ind.get("training_target_occupation", "?")
             lines.append(f"Training for {target}: {training} months remaining")
 
-        lines.extend([
-            "",
-            f"# Legal Actions This Month",
-        ])
+        # Separate actions into available and unavailable groups.
+        # Both are shown in text so weaker models (e.g. Flash) have a
+        # textual anchor for what they CAN do — not just what they can't.
+        all_actions = macro.get("available_actions", {})
+        available_names: list[str] = []
+        unavailable: list[tuple[str, str]] = []
+        for name, info in all_actions.items():
+            if isinstance(info, dict) and info.get("allowed"):
+                available_names.append(name)
+            elif isinstance(info, dict):
+                unavailable.append((name, info.get("reason", "")))
 
-        avail = macro.get("available_actions", {})
-        if avail:
-            for action_name, info in avail.items():
-                allowed = info.get("allowed", info) if isinstance(info, dict) else info
-                reason = info.get("reason", "") if isinstance(info, dict) else ""
-                if allowed:
-                    lines.append(f"  ✓ {action_name}")
-                else:
-                    suffix = f" — {reason}" if reason else ""
-                    lines.append(f"  ✗ {action_name}{suffix}")
-        else:
-            lines.append("  (no actions available)")
+        if available_names:
+            lines.extend(["", "## Available Actions (you CAN call these)"])
+            for name in available_names:
+                lines.append(f"  {name}")
+
+        if unavailable:
+            lines.extend(["", "## Unavailable"])
+            for action_name, reason in unavailable:
+                suffix = f" — {reason}" if reason else ""
+                lines.append(f"  {action_name}{suffix}")
 
         # Economy status
         econ = macro.get("economy_status", "")
@@ -371,14 +489,6 @@ class LLMAgent:
                 f"# Economy Status",
                 f"  {econ}",
             ])
-
-        lines.extend([
-            "",
-            f"# Macro Economy",
-            f"Industry average monthly salaries:",
-        ])
-        for industry, salary in macro.get("industry_incomes", {}).items():
-            lines.append(f"  {industry}: ${salary:,.0f}")
 
         # Available occupations (only provided when unemployed)
         avail = macro.get("available_occupations", {})
@@ -398,7 +508,7 @@ class LLMAgent:
                 ) if tiers else "—"
                 lines.append(
                     f"  {occ_id}: ${detail['base_monthly_salary']:,.0f}/mo "
-                    f"({detail['industry']}, sens={detail['skill_sensitivity']}, "
+                    f"({detail['industry']}, "
                     f"gen≥{req}, health≥{min_h:.1f}, ${total:,.0f}+{train}mo)"
                 )
                 if tier_str:
@@ -421,92 +531,15 @@ class LLMAgent:
         if is_retry:
             lines.extend([
                 "",
-                "Your last action was REJECTED. Try a DIFFERENT action, or call no tool.",
+                "Your last action was rejected. Check the reason above and adjust.",
             ])
         elif ind.get("job_status") == "unemployed":
             lines.extend([
                 "",
-                "You are UNEMPLOYED — you have no income and your cash is burning every "
-                "month.  You MUST call switch_occupation to get a job.  Only occupations "
-                "with ✓ in Legal Actions are available to you right now.",
+                "You are UNEMPLOYED — no income.",
             ])
-        else:
-            lines.extend([
-                "",
-                "You are employed and earning automatically.  Call a tool only if you "
-                "want to switch jobs, upskill, or do intensive work.",
-            ])
+        # employed: no extra message needed — available tools speak for themselves.
         return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Contradiction detection (last-resort safety net for small models)
-# ---------------------------------------------------------------------------
 
-# Phrases that indicate the agent intends NOT to call a tool this turn.
-_NO_TOOL_PHRASES: tuple = (
-    "call no tool",
-    "not call a tool",
-    "not call any tool",
-    "will not call",
-    "won't call",
-    "do nothing",
-    "no action",
-    "no tool call",
-    "without calling",
-    "continue working",
-    "continue auto-working",
-    "not use any tool",
-    "will remain",
-    "i will stay",
-    "save cash",
-    "just work",
-    "remain unemployed",
-)
-
-# Phrases that OVERRIDE the no-tool detection — the model explicitly wants to act.
-_TOOL_ACTION_PHRASES: tuple = (
-    "i call ",
-    "will call ",
-    "calling the ",
-    "i will switch",
-    "i will upskill",
-    "i will quit",
-    "let me switch",
-    "let me upskill",
-    "let me quit",
-    "going to switch",
-    "going to upskill",
-    "going to quit",
-    "i am switching",
-    "i am upskilling",
-    "i am quitting",
-    "i choose",
-    "i want to switch",
-    "i want to upskill",
-    "i want to quit",
-)
-
-
-def _reasoning_says_no_tool(reasoning: str) -> bool:
-    """Return True if the reasoning text clearly says NO tool should be called.
-
-    This is a heuristic safety net for models that self-contradict — they
-    write sensible reasoning that says "do nothing" but then fire a tool
-    anyway.  The presence of an explicit action phrase overrides the
-    no-tool signal.
-    """
-    text = reasoning.lower()
-
-    # Must match at least one no-tool phrase.
-    has_no_tool = any(phrase in text for phrase in _NO_TOOL_PHRASES)
-    if not has_no_tool:
-        return False
-
-    # Override: if the reasoning also explicitly says to call a tool,
-    # the no-tool match was incidental.
-    has_action = any(phrase in text for phrase in _TOOL_ACTION_PHRASES)
-    if has_action:
-        return False
-
-    return True
