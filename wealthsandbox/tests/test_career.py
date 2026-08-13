@@ -463,7 +463,7 @@ class TestEnergySystem(unittest.TestCase):
         s = self._state(energy=0.8)
         action = Action(career_move=CareerMove.INTENSIVE_WORK)
         self.es.handle_action(action, s)
-        self.assertAlmostEqual(s.energy, 0.4)
+        self.assertAlmostEqual(s.energy, 0.3)
 
     def test_energy_drained_during_training(self):
         s = self._state(energy=0.5, training=3)

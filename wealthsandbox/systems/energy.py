@@ -27,17 +27,21 @@ class EnergySystem(BaseSystem):
     def __init__(
         self,
         cost_per_upskill: float = 0.4,
+        cost_per_intensive_work: float = 0.5,
         decline_per_training_month: float = 0.15,
         recovery_per_month: float = 0.10,
     ):
         """
         Args:
             cost_per_upskill: One-time energy deduction when starting an upskill.
+            cost_per_intensive_work: One-time energy deduction when starting
+                intensive work.
             decline_per_training_month: Energy lost per month while training
                 for a new occupation.
             recovery_per_month: Energy regained per month when NOT training.
         """
         self.cost_per_upskill = cost_per_upskill
+        self.cost_per_intensive_work = cost_per_intensive_work
         self.decline_per_training_month = decline_per_training_month
         self.recovery_per_month = recovery_per_month
 
@@ -65,5 +69,5 @@ class EnergySystem(BaseSystem):
         if action.career_move == CareerMove.UPSKILL:
             state.energy = max(0.0, state.energy - self.cost_per_upskill)
         elif action.career_move == CareerMove.INTENSIVE_WORK:
-            state.energy = max(0.0, state.energy - self.cost_per_upskill)
+            state.energy = max(0.0, state.energy - self.cost_per_intensive_work)
         return False

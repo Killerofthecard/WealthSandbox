@@ -39,6 +39,8 @@ def _build_system_prompt(
     tax_rate: float = 0.15,
     energy_threshold: float = 0.4,
     energy_cost_per_upskill: float = 0.4,
+    energy_cost_per_intensive_work: float = 0.5,
+    energy_decline_per_training_month: float = 0.15,
     energy_recovery_per_month: float = 0.10,
     intensive_work_months: int = 3,
     occ_skill_passive_months: int = 12,
@@ -139,16 +141,30 @@ etc.) and you won't get another chance until next month.
 
 **Think through ALL the tools you need, then call them together.**
 
+## Output discipline — your reasoning and tool calls MUST match
+
+Each turn you output BOTH a short reasoning AND the tools you call.  These
+are one unit: your reasoning is the plan, your tool calls are the execution.
+
+- If your reasoning says you will act (upskill, deposit, buy/sell stock,
+  switch occupation, borrow, repay, quit), you MUST call that tool in the
+  SAME response.
+- Never describe an action in your reasoning and then omit the tool call.
+- If you truly do nothing this month, call no tools and say so plainly.
+
+Before finishing, re-read your reasoning and confirm every action you
+described has a matching tool call.  If one is missing, add it.
+
 ## Economy
 Each turn you see an Economy Status: HEALTHY, SLUGGISH, WEAK, or RECESSION.
-This affects your income, layoff risk, and loan interest rates.  In
-recession, conserve cash and expect possible layoffs.
+This reflects the labour market and affects your income, layoff risk, and
+loan interest rates.
 
 ## Stock Market
 You can invest in a stock index fund that tracks the broad market.  Stock
 values fluctuate monthly — they can go up OR down.  Key rules:
-- **buy_stock**: Your money only starts growing NEXT month.  Purchases do
-  NOT earn this month's market return.
+- **buy_stock**: Purchases are NOT exposed to market returns until NEXT
+  month.
 - **sell_stock**: Proceeds settle NEXT month.  The cash cannot cover this
   month's living expenses or loan payments.
 - **Forced liquidation**: If cash and savings are both exhausted, stocks
@@ -159,21 +175,19 @@ values fluctuate monthly — they can go up OR down.  Key rules:
 
 # Monthly Settlement — what happens automatically every month, in order
 
-1. **Income** — if employed, salary is added to cash.
-2. **Stock settlement & returns** — pending sale proceeds arrive in cash;
+1. **Your actions** — you call ALL the tools you need this month in ONE
+   response.  They execute FIRST, before anything below.
+2. **Income** — if employed, salary is added to cash.
+3. **Stock settlement & returns** — pending sale proceeds arrive in cash;
    stock value updated by this month's market return.
-3. **Layoff check** — small chance of being laid off (higher in recession).
-4. **Your actions** — you call ALL the tools you need this month in ONE
-   response.  After they execute, the month ends.  Plan ahead.
+4. **Layoff / health check** — small chance of being laid off (higher in
+   recession); forced resignation if health drops below the job's minimum.
 5. **Living expenses** — ${living_expense:,.0f} deducted from cash (auto-withdrawn from
    savings first, then stocks are force-sold at a discount if needed).
-6. **Bank interest** — savings earn interest; loan accrues interest, then
-   2% of the loan balance is auto-repaid (min $50).
+6. **Bank interest & repayment** — savings earn interest; loan accrues
+   interest, then 2% of the loan balance is auto-repaid (min $50).
 7. **Health decline** — health decreases (rate depends on age).
 8. **Bankruptcy / death check** — game ends if net worth ≤ $0 or health ≤ 0.
-
-You can act between steps 4 and 5.  Plan your borrow / deposit / repay
-decisions knowing that steps 5–8 always follow.
 
 # Your State — what each number means
 
@@ -184,7 +198,7 @@ decisions knowing that steps 5–8 always follow.
 
 **Savings** ($0 at start)
   Bank deposit earning monthly interest (federal funds rate / 12).
-  Not auto-spent — a safety net.
+  Automatically tapped to cover living expenses when cash runs out.
 
 **Stocks** ($0 at start)
   Stock index fund holdings.  Value fluctuates monthly with the market.
@@ -211,7 +225,7 @@ decisions knowing that steps 5–8 always follow.
 
 **Energy** ({initial_energy:.1f} at start, range 0.0–1.0)
   Spent on upskill ({energy_cost_per_upskill:.0%}) and intensive_work
-  ({energy_cost_per_upskill:.0%}).  Drains {15}%/mo during occupation
+  ({energy_cost_per_intensive_work:.0%}).  Drains {energy_decline_per_training_month*100:.0f}%/mo during occupation
   training.  Recovers {energy_recovery_per_month*100:.0f}%/mo when not
   training.  Need ≥{energy_threshold:.0%} to start upskill or intensive_work.
 
@@ -224,7 +238,8 @@ decisions knowing that steps 5–8 always follow.
   Job-specific experience in your current occupation.  Determines your
   tier (Junior → Senior → …) and salary multiplier.  Grows passively
   every {occ_skill_passive_months} months, faster via `intensive_work`.
-  **Resets when switching occupations.**
+  **Tied to one occupation** — switching to a new occupation starts at
+  entry level; returning to a previous one restores some skill.
 
 **Tenure** (0 at start)
   Months spent in your current occupation.  Together with occupation
@@ -237,9 +252,9 @@ The month ends after they execute — there is no second chance.
 
 | Tool | Effect | Requirements & Cost |
 |---|---|---|
-| `switch_occupation(id)` | Change career.  General skill carries over (same industry ~80%, unrelated ~20%).  Occupation skill resets. | gen_skill ≥ occupation minimum, health ≥ occupation minimum.  **manufacturing_worker is always free** (no cash, no training).  All other jobs: cash ≥ ${switch_base_cost:,} + entry_cost + ${living_expense:,.0f} buffer.  Training 0–6 months (keep working). |
-| `upskill` | General skill +{upskill_skill_boost}.  Unlocks new occupations, boosts salary. | ${upskill_cost:,} cash + {energy_cost_per_upskill:.0%} energy.  {upskill_months} months.  Need ≥${upskill_cost + living_expense:,.0f} cash + ≥{energy_threshold:.0%} energy. |
-| `intensive_work` | Occupation skill +1 in current job.  Accelerates tier promotion. | {energy_cost_per_upskill:.0%} energy (NO cash).  {intensive_work_months} months.  Must be employed, ≥{energy_threshold:.0%} energy. |
+| `switch_occupation(id)` | Change career.  General skill carries over (same industry ~80%, unrelated ~20%).  Occupation skill resets. | gen_skill ≥ occupation minimum, health ≥ occupation minimum.  **manufacturing_worker is always free** (no cash, no training).  All other jobs: cash ≥ ${switch_base_cost:,.0f} + entry_cost + ${living_expense:,.0f} buffer.  Training 0–6 months. |
+| `upskill` | General skill +{upskill_skill_boost}.  Unlocks new occupations, boosts salary. | ${upskill_cost:,.0f} cash + {energy_cost_per_upskill:.0%} energy.  {upskill_months} months.  Need ≥${upskill_cost + living_expense:,.0f} cash + ≥{energy_threshold:.0%} energy. |
+| `intensive_work` | Occupation skill +1 in current job.  Accelerates tier promotion. | {energy_cost_per_intensive_work:.0%} energy (NO cash).  {intensive_work_months} months.  Must be employed, ≥{energy_threshold:.0%} energy. |
 | `quit_job` | Resign immediately.  Income → $0.  Living expenses continue. | Must be employed. |
 | `deposit(amount)` | Cash → savings.  Earns monthly interest. | Keep ≥${living_expense:,.0f} cash.  amount ≤ cash − ${living_expense:,.0f}. |
 | `withdraw(amount)` | Savings → cash.  Instant. | amount ≤ savings balance. |
@@ -280,6 +295,8 @@ class LLMAgent:
         max_skill_level: int = 10,
         switch_base_cost: float = 2_000.0,
         energy_threshold_for_upskill: float = 0.4,
+        energy_cost_per_intensive_work: float = 0.5,
+        energy_decline_per_training_month: float = 0.15,
         intensive_work_months: int = 3,
         occ_skill_passive_months: int = 12,
         occupations: Optional[Dict[str, Any]] = None,
@@ -303,6 +320,8 @@ class LLMAgent:
             max_occ_skill=max_skill_level,
             switch_base_cost=switch_base_cost,
             energy_threshold=energy_threshold_for_upskill,
+            energy_cost_per_intensive_work=energy_cost_per_intensive_work,
+            energy_decline_per_training_month=energy_decline_per_training_month,
             intensive_work_months=intensive_work_months,
             occ_skill_passive_months=occ_skill_passive_months,
             occupations=occupations,

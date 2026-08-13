@@ -114,6 +114,7 @@ def _build_default_systems(config: EnvConfig) -> List[BaseSystem]:
         asset,
         EnergySystem(
             cost_per_upskill=config.energy_cost_per_upskill,
+            cost_per_intensive_work=config.energy_cost_per_intensive_work,
             decline_per_training_month=config.energy_decline_per_training_month,
             recovery_per_month=config.energy_recovery_per_month,
         ),
@@ -666,23 +667,19 @@ def _economy_status(unrate: float, usrecm: int) -> str:
     if usrecm == 1:
         return (
             "The economy is in RECESSION. Incomes are reduced across most "
-            "industries. Layoffs are common and finding a new job is difficult. "
-            "Conserve cash and avoid unnecessary spending."
+            "industries, and layoffs are more frequent."
         )
     elif unrate > 0.08:
         return (
-            "The economy is WEAK — unemployment is high. Jobs are hard to "
-            "find and incomes are under pressure. Build an emergency fund."
+            "The economy is WEAK — unemployment is high and incomes are "
+            "under pressure."
         )
     elif unrate > 0.05:
-        return (
-            "The economy is SLUGGISH — unemployment is above normal. "
-            "Proceed with moderate caution."
-        )
+        return "The economy is SLUGGISH — unemployment is above normal."
     else:
         return (
             "The economy is HEALTHY — unemployment is low and jobs are "
-            "plentiful. A good time to invest in your career."
+            "plentiful."
         )
 
 

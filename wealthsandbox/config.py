@@ -29,12 +29,6 @@ MAX_SKILL_LEVEL = 10                 # hard ceiling on skill
 SWITCH_OCCUPATION_COST = 2_000.0     # one-time cost to switch occupations
 
 # ---------------------------------------------------------------------------
-# Energy / vitality
-# ---------------------------------------------------------------------------
-ENERGY_DECLINE_PER_TRAINING_MONTH = 0.15   # energy consumed per month while training
-ENERGY_RECOVERY_PER_MONTH = 0.02           # energy recovered per month when not training
-
-# ---------------------------------------------------------------------------
 # Skill transfer on occupation switch
 # ---------------------------------------------------------------------------
 BASE_SKILL_RETENTION = 0.8                  # same-industry retention (upper bound)
@@ -44,18 +38,11 @@ MIN_SKILL_RETENTION = 0.2                   # cross-industry retention (floor)
 # Living expenses & health
 # ---------------------------------------------------------------------------
 MONTHLY_LIVING_EXPENSE = 2_000.0     # baseline monthly living cost
-HEALTH_DECLINE_PER_MONTH = 0.001     # natural health erosion per month
 
 # ---------------------------------------------------------------------------
 # Tax (flat rate for simplicity)
 # ---------------------------------------------------------------------------
 TAX_RATE = 0.15                      # 15 % flat income tax
-
-# ---------------------------------------------------------------------------
-# Termination
-# ---------------------------------------------------------------------------
-BANKRUPTCY_THRESHOLD = 0.0           # episode ends when cash hits 0
-
 
 # ---------------------------------------------------------------------------
 # EnvConfig — single source of truth for environment rules
