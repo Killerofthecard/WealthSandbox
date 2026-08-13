@@ -20,7 +20,7 @@ from wealthsandbox.config import EnvConfig
 from wealthsandbox.macro_layer import MacroLayer
 from wealthsandbox.micro_layer import MicroLayer
 from wealthsandbox.types import Action, Observation, AgentState, CareerMove
-from wealthsandbox.agents.tools import ToolCall, SWITCH_OCCUPATION, UPSKILL, INTENSIVE_WORK, QUIT_JOB, DEPOSIT, WITHDRAW, BORROW, REPAY
+from wealthsandbox.agents.tools import ToolCall, SWITCH_OCCUPATION, UPSKILL, INTENSIVE_WORK, QUIT_JOB, DEPOSIT, WITHDRAW, BORROW, REPAY, BUY_STOCK, SELL_STOCK
 from wealthsandbox.systems.base import BaseSystem
 from wealthsandbox.systems.career import CareerSystem
 from wealthsandbox.systems.living import LivingExpenseSystem
@@ -28,6 +28,7 @@ from wealthsandbox.systems.bank import BankSystem
 from wealthsandbox.systems.health import HealthSystem
 from wealthsandbox.systems.aging import AgingSystem
 from wealthsandbox.systems.energy import EnergySystem
+from wealthsandbox.systems.asset import AssetSystem
 from wealthsandbox.validator import ActionValidator
 
 
@@ -80,15 +81,21 @@ def _build_default_systems(config: EnvConfig) -> List[BaseSystem]:
 
     Systems are ordered so that income arrives before expenses are deducted:
       1. CareerSystem   — auto-work income, upskill/training timers
-      2. EnergySystem   — energy drain during training, recovery, upskill cost
-      3. LivingExpenseSystem — deduct monthly living expense
-      4. HealthSystem   — apply age-accelerated health decline
-      5. AgingSystem    — increment age on birthdays
+      2. AssetSystem    — stock settlement + mark-to-market
+      3. EnergySystem   — energy drain during training, recovery, upskill cost
+      4. LivingExpenseSystem — deduct monthly living expense (with stock fallback)
+      5. BankSystem     — savings/loan interest
+      6. HealthSystem   — apply age-accelerated health decline
+      7. AgingSystem    — increment age on birthdays
 
     Order within tick matters: income must land in cash before living-expense
-    checks for bankruptcy, and energy/health/age come after the financial
-    transactions.
+    checks for bankruptcy.  AssetSystem runs after Career so settlements arrive
+    in cash before expenses.  LivingExpenseSystem gets a reference to
+    AssetSystem for forced liquidation as a last resort.
     """
+    asset = AssetSystem(
+        forced_sale_discount=config.forced_sale_discount,
+    )
     return [
         CareerSystem(
             occupations=None,  # use DEFAULT_OCCUPATIONS
@@ -104,6 +111,7 @@ def _build_default_systems(config: EnvConfig) -> List[BaseSystem]:
             layoff_base_rate=config.layoff_base_rate,
             seed=config.seed,
         ),
+        asset,
         EnergySystem(
             cost_per_upskill=config.energy_cost_per_upskill,
             decline_per_training_month=config.energy_decline_per_training_month,
@@ -111,6 +119,7 @@ def _build_default_systems(config: EnvConfig) -> List[BaseSystem]:
         ),
         LivingExpenseSystem(
             monthly_living_expense=config.monthly_living_expense,
+            asset_system=asset,
         ),
         BankSystem(),
         HealthSystem(
@@ -297,6 +306,10 @@ class WealthSandBoxEnv:
             "cash": round(state.cash, 2),
             "savings": round(state.savings, 2),
             "loan_balance": round(state.loan_balance, 2),
+            "stock_value": round(state.stock_value, 2),
+            "pending_settlement": round(state.pending_settlement, 2),
+            "total_invested": round(state.total_invested, 2),
+            "last_month_stock_return": round(state.last_month_stock_return, 6),
             "energy": round(state.energy, 3),
             "occupation_id": state.occupation_id,
             "general_skill": state.general_skill,
@@ -338,6 +351,10 @@ class WealthSandBoxEnv:
             return self.validator.validate_borrow(action, state)
         elif move == CareerMove.REPAY:
             return self.validator.validate_repay(action, state)
+        elif move == CareerMove.BUY_STOCK:
+            return self.validator.validate_buy_stock(action, state)
+        elif move == CareerMove.SELL_STOCK:
+            return self.validator.validate_sell_stock(action, state)
         return self.validator.validate(action, state)
 
     def get_state_snapshot(self) -> Dict[str, Any]:
@@ -386,6 +403,12 @@ class WealthSandBoxEnv:
             "health": round(self.config.profile.initial_health, 3),
             "energy": round(self.config.profile.initial_energy, 3),
             "cash": round(self.config.profile.initial_cash, 2),
+            "savings": 0.0,
+            "loan_balance": 0.0,
+            "stock_value": 0.0,
+            "pending_settlement": 0.0,
+            "total_invested": 0.0,
+            "net_worth": round(self.config.profile.initial_cash, 2),
             "occupation_id": "",
             "general_skill": self.config.profile.initial_general_skill,
             "occupation_skills": {},
@@ -507,6 +530,16 @@ class WealthSandBoxEnv:
                     career_move=CareerMove.REPAY,
                     amount=float(params.get("amount", 0)),
                 ))
+            elif tc.tool_name == BUY_STOCK:
+                actions.append(Action(
+                    career_move=CareerMove.BUY_STOCK,
+                    amount=float(params.get("amount", 0)),
+                ))
+            elif tc.tool_name == SELL_STOCK:
+                actions.append(Action(
+                    career_move=CareerMove.SELL_STOCK,
+                    amount=float(params.get("amount", 0)),
+                ))
 
         if not actions:
             actions.append(Action(career_move=CareerMove.NONE))
@@ -568,6 +601,28 @@ class WealthSandBoxEnv:
                 f"(gen_skill {self.micro.state.general_skill}). "
             )
         narrative += f"Cash: ${self.micro.state.cash:,.0f}. "
+        if self.micro.state.stock_value > 0:
+            ret_pct = self.micro.state.last_month_stock_return * 100
+            pnl = self.micro.state.stock_value - self.micro.state.total_invested
+            narrative += (
+                f"Stocks: ${self.micro.state.stock_value:,.0f} "
+                f"({ret_pct:+.1f}% last month; "
+                f"invested ${self.micro.state.total_invested:,.0f}, "
+                f"P&L: ${pnl:+,.0f}). "
+            )
+        if self.micro.state.pending_settlement > 0:
+            narrative += (
+                f"Pending settlement: ${self.micro.state.pending_settlement:,.0f} "
+                f"(available next month). "
+            )
+        net_worth = (
+            self.micro.state.cash + self.micro.state.savings
+            + self.micro.state.stock_value + self.micro.state.pending_settlement
+            - self.micro.state.loan_balance
+        )
+        narrative += (
+            f"Net worth: ${net_worth:,.0f}. "
+        )
         narrative += f"Energy: {self.micro.state.energy:.0%}. "
         narrative += f"Health: {self.micro.state.health:.3f}. "
         if self.micro.state.upskill_months_remaining > 0:

@@ -1,6 +1,6 @@
 # WealthSandBox — Career & Life Simulation Sandbox
 
-一个研究 LLM agent 长期经济决策行为的沙盒环境。agent 从无业青年出发，在真实的宏观经济周期（FRED 历史数据驱动）和有限寿命约束下，通过职业选择、技能投资、银行理财、借贷等决策，最大化最终净资产。
+一个研究 LLM agent 长期经济决策行为的沙盒环境。agent 从无业青年出发，在真实的宏观经济周期（FRED 历史数据驱动）和有限寿命约束下，通过职业选择、技能投资、股票投资、银行理财、借贷等决策，最大化最终净资产。
 
 ---
 
@@ -47,9 +47,12 @@ DEFAULT_MODEL=deepseek-v4-pro
 
 | 变量 | 范围 | 说明 |
 |---|---|---|
-| `cash` | 0 ~ ∞ | 流动资产，**现金+储蓄 ≤ $0 立刻破产** |
+| `cash` | 0 ~ ∞ | 流动资产 |
 | `savings` | 0 ~ ∞ | 银行存款，按 FEDFUNDS / 12 生息，不自动花 |
 | `loan_balance` | 0 ~ ∞ | 银行贷款，利息 (FEDFUNDS+2%)/月，每月自动还 2%（最低$50） |
+| `stock_value` | 0 ~ ∞ | 股票指数基金市值，按月随 S&P 500 波动 |
+| `pending_settlement` | 0 ~ ∞ | 股票卖出待结算金额，T+1 下月到账 |
+| `total_invested` | 0 ~ ∞ | 累计净投入本金（买入 − 按比例卖出），用于计算盈亏 |
 | `general_skill` | 1 ~ 10 | 通用能力，决定可进入的职业，换职业时部分保留 |
 | `occupation_skills` | per-job 1 ~ 10 | 各职业的专项经验，控制 tier 晋升，换职业清零 |
 | `health` | 0.0 ~ 1.0 | 随年龄加速衰减，低于职业阈值被强制辞职，≤ 0 死亡 |
@@ -133,7 +136,44 @@ MacroLayer 从 FRED 历史数据驱动经济周期。`raw_data/` 下有三个周
 
 ---
 
-## 八种可用工具
+## 股票市场系统
+
+### 数据来源
+
+股票数据来自 **Robert Shiller 的 S&P 500 历史数据集**（1871 年至今），预处理脚本 `scripts/prepare_stock_data.py` 将原始 Excel 转为 `raw_data/stock_monthly.csv`：
+
+| 列 | 含义 |
+|---|---|
+| `year`, `month` | 年月 |
+| `GS10` | 10 年期美国国债名义收益率 |
+| `SP500_TR` | S&P 500 月度**总回报率**（含股息） |
+
+```
+SP500_TR[t] = (Price[t] + Dividend[t] / 12) / Price[t−1] − 1
+```
+
+这是一个**名义总回报率**（含价格变动 + 股息再投资），无需 agent 计算股息，直接应用于持仓市值。
+
+### 核心规则
+
+| 规则 | 说明 |
+|---|---|
+| **市值计价** | 不记录份额，直接追踪持仓市值。每月 tick 时：`stock_value ×= (1 + SP500_TR)` |
+| **当月买入不参与当月收益** | 买入操作将金额标记为 `_this_month_stock_purchases`，tick 时只对买入前的存量应用回报，防止同月买入又赚收益的套利 |
+| **T+1 卖出结算** | 卖出资金进入 `pending_settlement`，下月 tick 时才到账。不能用于当月生活费或还款 |
+| **不自动清算** | 股票不会被自动卖出变现——除非现金和储蓄都耗尽，触发强制折价卖出 |
+| **强制清算** | 现金和储蓄均不足时，股票按 `forced_sale_discount`（默认 10%）折价卖出以覆盖生活费缺口 |
+| **破产判定** | 净资 = 现金 + 储蓄 + 股票市值 + 待结算资金 − 贷款。net_worth ≤ $0 → 破产 |
+
+### 为什么用总回报率而非价格指数
+
+1. **越简单越好**：agent 只需要知道"我的持股本月涨/跌了 X%"。拆分价格变动和股息只会增加认知负担
+2. **股息自动再投资**：总回报率天然假设股息再投资，避免了 agent 需要手动管理分红现金的复杂性
+3. **真实市场行为**：现实中指数基金投资者持有的 ETF 净值就是总回报
+
+---
+
+## 十种可用工具
 
 agent 不调工具 = 自动工作赚钱。工具用于**主动改变现状**。每月可提交**多个工具**（原子 bundle，按序执行）。
 
@@ -154,6 +194,15 @@ agent 不调工具 = 自动工作赚钱。工具用于**主动改变现状**。�
 | `withdraw(amount)` | 储蓄 → 现金 | amount ≤ 储蓄余额 |
 | `borrow(amount)` | 银行贷款 | 就职限额 = 12×月入，无职限额 = $8,000 |
 | `repay(amount)` | 提前还贷 | amount ≤ 现金，amount ≤ 贷款余额 |
+
+### 股票类
+
+| 工具 | 效果 | 限制 |
+|---|---|---|
+| `buy_stock(amount)` | 现金 → 股票指数基金，按月随 S&P 500 波动 | 保留 ≥$2,000 现金，买入不享受当月收益 |
+| `sell_stock(amount)` | 卖出股票，资金 **T+1 下月到账** | amount ≤ 持股价值，需持有股票 |
+
+> **股票规则**：当月买入不参与当月市值变动（防止套利）。卖出资金 T+1 结算，不能用于当月生活费或还款。现金和储蓄耗尽时，股票会被**强制折价卖出**（10% 损失）以覆盖生活费。破产判定：`现金 + 储蓄 + 股票市值 + 待结算资金 − 贷款 ≤ $0`。
 
 ---
 
@@ -180,6 +229,8 @@ def guard_xxx(state: AgentState, career: CareerSystem) -> GuardResult:
 | `WITHDRAW` | savings > 0 → amount > 0 → amount ≤ savings |
 | `BORROW` | loan < limit → amount > 0 → loan + amount ≤ limit |
 | `REPAY` | loan > 0 → cash > 0 → amount > 0 → amount ≤ cash → amount ≤ loan |
+| `BUY_STOCK` | cash ≥ buffer → amount > 0 → amount ≤ cash − buffer |
+| `SELL_STOCK` | stock_value > 0 → amount > 0 → amount ≤ stock_value |
 
 ### 动态工具过滤
 
@@ -210,16 +261,18 @@ Phase 1 — VALIDATE + EXECUTE
   └─ 全部通过 → 在真实状态上执行所有 action
 
 Phase 2 — TICK（每月仅执行一次）
-  ├─ CareerSystem.tick:   自动发工资、layoff 判定、timer 推进
-  ├─ EnergySystem.tick:   培训能量消耗 / 休息能量恢复
-  └─ HealthSystem.tick:   年龄加速健康衰减
+  ├─ AssetSystem.tick:       T+1 卖出结算到账 + 股票市值按 S&P 500 总回报变动
+  ├─ CareerSystem.tick:      自动发工资、layoff 判定、timer 推进
+  ├─ EnergySystem.tick:      培训能量消耗 / 休息能量恢复
+  └─ HealthSystem.tick:      年龄加速健康衰减
 
 Phase 3 — FINALISE
-  ├─ LivingExpenseSystem: 扣除月生活费（现金不足自动从储蓄扣）
-  ├─ BankSystem.finalize: 储蓄利息、贷款利息、贷款自动还款
-  ├─ macro.step():        推进月份，加载下月宏观数据
-  ├─ AgingSystem:         年龄递增
-  ├─ check_dead():        破产/死亡/超龄判定
+  ├─ LivingExpenseSystem: 扣除月生活费（现金不足自动从储蓄扣，仍不足强制折价卖出股票）
+  ├─ AssetSystem.finalize: 将当月卖出转入 pending_settlement（T+1 延迟）
+  ├─ BankSystem.finalize:  储蓄利息、贷款利息、贷款自动还款
+  ├─ macro.step():         推进月份，加载下月宏观数据（含 S&P 500 和 GS10）
+  ├─ AgingSystem:          年龄递增
+  ├─ check_dead():         破产/死亡/超龄判定（净资 = 现金 + 储蓄 + 股票 + 待结算 − 贷款）
   └─ cash = max(0, cash)
 ```
 
@@ -286,7 +339,7 @@ messages = [
 │  │                           │    │                            │  │
 │  │  MacroLayer  ← FRED 数据  │    │  system_prompt ← 规则     │  │
 │  │  MicroLayer  ← 状态容器   │    │  messages[]   ← 对话史    │  │
-│  │  Systems[]   ← 6 子系统   │    │  tools[]      ← 动态过滤  │  │
+│  │  Systems[]   ← 7 子系统   │    │  tools[]      ← 动态过滤  │  │
 │  │  Validator   ← 守卫链     │    │  client       ← API 调用  │  │
 │  │  history[]   ← 轨迹存档   │    │                            │  │
 │  └──────────────────────────┘    └───────────────────────────┘  │
@@ -300,13 +353,14 @@ messages = [
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 六大子系统（实现 `BaseSystem` 协议：tick / finalize / handle_action / check_dead）
+### 七大子系统（实现 `BaseSystem` 协议：tick / finalize / handle_action / check_dead）
 
 | 系统 | 职责 |
 |---|---|
+| **AssetSystem** | 股票买入/卖出、月度市值变动（S&P 500 总回报）、T+1 结算、强制折价清算、破产判定 |
 | **CareerSystem** | 职业注册表、收入计算、转职/培训/upskill/intensive_work/辞职、tier 晋升、裁员判定 |
 | **EnergySystem** | 能量消耗（upskill/intensive_work）、培训月衰减、休息恢复 |
-| **LivingExpenseSystem** | 月生活费扣除，不足时自动从储蓄提取 |
+| **LivingExpenseSystem** | 月生活费扣除，不足时自动从储蓄提取，仍不足触发股票强制清算 |
 | **BankSystem** | 存取款、借贷、还款、月利息结算、自动还款 |
 | **HealthSystem** | 年龄加速健康衰减（20-29: 0.03%/月, 30-39: 0.1%, 40-49: 0.3%, 50+: 0.6%） |
 | **AgingSystem** | 年龄递增 + 超龄终止判定 |
@@ -342,6 +396,12 @@ EnvConfig(
     intensive_work_months=3,
     occ_skill_passive_months=12,
 
+    # 股票
+    stock_data_file="stock_monthly.csv",   # Shiller S&P 500 数据
+    forced_sale_discount=0.10,             # 强制清算折价率
+    require_stock_data=True,               # 股票数据必须覆盖模拟时段
+    min_cash_buffer=2_000.0,               # 买入股票后现金最低保留额
+
     # 宏观
     macro_data_dir="raw_data",
     macro_cycle="",      # "" = 随机, "boom", "normal", "recession"
@@ -363,7 +423,7 @@ EnvConfig(
   "run": {"timestamp": "...", "model": "deepseek-v4-pro", "seed": 42, "macro_cycle": "random", "macro_cycle_file": "2008_2009.csv"},
   "config": { ... EnvConfig 完整参数 ... },
   "profile": { "age": 20, "initial_cash": 10000.0, ... },
-  "active_systems": ["CareerSystem", "EnergySystem", "LivingExpenseSystem", "BankSystem", "HealthSystem", "AgingSystem"],
+  "active_systems": ["CareerSystem", "AssetSystem", "EnergySystem", "LivingExpenseSystem", "BankSystem", "HealthSystem", "AgingSystem"],
   "initial_state": { ... 第一步前的状态 ... },
   "system_prompt": "<完整 prompt 文本>",
   "total_steps": 480,
@@ -377,6 +437,8 @@ EnvConfig(
       "state_after": {
         "month": 1, "year": 2024, "age": 20,
         "cash": 6036.20, "savings": 0.0, "loan_balance": 0.0,
+        "stock_value": 0.0, "pending_settlement": 0.0, "total_invested": 0.0,
+        "last_month_stock_return": 0.0,
         "occupation_id": "manufacturing_worker", "general_skill": 1, "occ_skill": 1,
         "tenure_months": 1, "current_tier": 0,
         "monthly_after_tax_income": 3036.20, "job_status": "employed",
@@ -409,10 +471,13 @@ sandbox/
 ├── README.md
 ├── raw_data/                         # FRED 历史宏观数据
 │   ├── UNRATE.csv, USREC.csv, FEDFUNDS.csv
+│   ├── stock_monthly.csv               # Shiller S&P 500 月度总回报 + GS10
 │   ├── boom/                         # 经济扩张周期
 │   ├── normal/                       # 正常周期
 │   └── recession/                    # 衰退周期
 ├── trajectories/                     # 轨迹输出
+├── scripts/                            # 数据预处理
+│   └── prepare_stock_data.py           #   Shiller 数据清洗 → stock_monthly.csv
 │
 └── wealthsandbox/
     ├── __init__.py                   # 导出 WealthSandBoxEnv, EnvConfig
@@ -426,6 +491,7 @@ sandbox/
     │
     ├── systems/
     │   ├── base.py                   # BaseSystem 抽象类
+    │   ├── asset.py                  # AssetSystem（股票买入/卖出/市值变动/强制清算）
     │   ├── career.py                 # CareerSystem（职业/收入/技能/tier/转职/upskill/裁员）
     │   ├── energy.py                 # EnergySystem（精力消耗与恢复）
     │   ├── living.py                 # LivingExpenseSystem（月生活费）
@@ -442,6 +508,7 @@ sandbox/
         ├── test_career.py            # CareerSystem 单元测试
         ├── test_validator.py         # 守卫单元测试
         └── test_tools.py             # 工具解析测试
+        └── test_asset.py             # AssetSystem 单元 + 集成测试
 ```
 
 ### 扩展点

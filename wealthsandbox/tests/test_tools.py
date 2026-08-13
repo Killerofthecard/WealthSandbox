@@ -74,10 +74,10 @@ class TestToolSchemas(unittest.TestCase):
 
     def test_tools_present(self):
         names = {t["function"]["name"] for t in TOOLS}
-        self.assertEqual(names, {"quit_job", "deposit", "withdraw", "borrow", "repay", "switch_occupation", "upskill", "intensive_work"})
+        self.assertEqual(names, {"quit_job", "deposit", "withdraw", "borrow", "repay", "switch_occupation", "upskill", "intensive_work", "buy_stock", "sell_stock"})
 
     def test_tool_count(self):
-        self.assertEqual(len(TOOLS), 8)
+        self.assertEqual(len(TOOLS), 10)
 
 
 class TestDecision(unittest.TestCase):

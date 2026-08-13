@@ -1,7 +1,8 @@
 """LivingExpenseSystem: deducts monthly living expenses from agent cash.
 
 Passive system — the agent cannot prevent or alter the deduction.
-Shortfall is automatically covered from savings.  Bankruptcy = cash + savings ≤ 0.
+Shortfall is covered from savings first, then forced stock liquidation.
+Bankruptcy is determined by AssetSystem.check_dead (net worth).
 """
 
 from typing import Any, Dict, Optional
@@ -14,12 +15,18 @@ from wealthsandbox.config import MONTHLY_LIVING_EXPENSE
 class LivingExpenseSystem(BaseSystem):
     """Deduct a fixed living expense from cash every month.
 
-    If cash can't cover the expense, savings are auto-withdrawn.
-    Bankruptcy only when both cash and savings are exhausted.
+    If cash can't cover the expense, savings are auto-withdrawn first,
+    then stocks are force-liquidated at a discount.  Bankruptcy is handled
+    by AssetSystem (net worth ≤ 0).
     """
 
-    def __init__(self, monthly_living_expense: float = MONTHLY_LIVING_EXPENSE):
+    def __init__(
+        self,
+        monthly_living_expense: float = MONTHLY_LIVING_EXPENSE,
+        asset_system: Optional[object] = None,
+    ):
         self.monthly_living_expense = monthly_living_expense
+        self._asset_system = asset_system
 
     def tick(self, state: AgentState, macro: Dict[str, Any]) -> None:
         pass
@@ -29,7 +36,8 @@ class LivingExpenseSystem(BaseSystem):
 
     def finalize(self, state: AgentState, macro: Dict[str, Any]) -> None:
         state.cash -= self.monthly_living_expense
-        # Auto-cover shortfall from savings
+
+        # Auto-cover shortfall from savings first
         if state.cash < 0.0 and state.savings > 0:
             shortfall = -state.cash
             pulled = min(shortfall, state.savings)
@@ -38,15 +46,21 @@ class LivingExpenseSystem(BaseSystem):
             state.last_month_events.append(
                 f"Auto-withdrew ${pulled:,.0f} from savings to cover living expenses."
             )
+
+        # If still short, force-liquidate stocks
+        if state.cash < 0.0 and self._asset_system is not None:
+            shortfall = -state.cash
+            self._asset_system.force_liquidate(state, shortfall)
+
         if state.cash >= 0.0:
             state.last_month_events.append(
                 f"Paid ${self.monthly_living_expense:,.0f} living expenses."
             )
         else:
-            state.last_month_events.append("Cannot afford living expenses!")
+            state.last_month_events.append(
+                f"Cannot afford living expenses! Cash: ${state.cash:,.2f}"
+            )
 
     def check_dead(self, state: AgentState) -> Optional[str]:
-        """Bankruptcy: cash + savings at or below zero."""
-        if state.cash + state.savings <= 0.0:
-            return "bankruptcy"
+        """Bankruptcy is now handled by AssetSystem.check_dead (net worth)."""
         return None

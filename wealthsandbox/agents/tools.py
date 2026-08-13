@@ -24,8 +24,10 @@ DEPOSIT = "deposit"
 WITHDRAW = "withdraw"
 BORROW = "borrow"
 REPAY = "repay"
+BUY_STOCK = "buy_stock"
+SELL_STOCK = "sell_stock"
 
-ALL_TOOL_NAMES = {SWITCH_OCCUPATION, UPSKILL, INTENSIVE_WORK, QUIT_JOB, DEPOSIT, WITHDRAW, BORROW, REPAY}
+ALL_TOOL_NAMES = {SWITCH_OCCUPATION, UPSKILL, INTENSIVE_WORK, QUIT_JOB, DEPOSIT, WITHDRAW, BORROW, REPAY, BUY_STOCK, SELL_STOCK}
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +46,8 @@ def build_tools(
     max_occ_skill: int = 10,
     occ_skill_passive_months: int = 12,
     occupations: Optional[Dict[str, Any]] = None,
+    min_cash_buffer: float = 2_000.0,
+    forced_sale_discount: float = 0.10,
 ) -> List[Dict[str, Any]]:
     """Build the tool definitions with dynamic costs and occupation data."""
 
@@ -229,6 +233,43 @@ def build_tools(
                 "name": "intensive_work",
                 "description": intensive_work_desc,
                 "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "buy_stock",
+                "description": (
+                    f"Move cash into a stock index fund.  Purchases do NOT earn "
+                    f"this month's market return — your money only starts "
+                    f"growing next month.  Stock value fluctuates monthly with "
+                    f"the market.  Must keep ≥${min_cash_buffer:,.0f} cash "
+                    f"for living expenses.  Example: buy_stock(amount=5000)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "amount": {"type": "number", "description": "Amount to invest in stocks."},
+                    },
+                    "required": ["amount"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "sell_stock",
+                "description": (
+                    f"Sell stocks.  Proceeds settle NEXT month and cannot cover "
+                    f"this month's expenses.  Example: sell_stock(amount=3000)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "amount": {"type": "number", "description": "Amount of stocks to sell."},
+                    },
+                    "required": ["amount"],
+                },
             },
         },
     ]

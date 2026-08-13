@@ -562,6 +562,8 @@ def build_agent(args, config=None) -> object:
             energy_recovery_per_month=config.energy_recovery_per_month if config else 0.10,
             occupations=occupation_details,
             persona=persona,
+            forced_sale_discount=config.forced_sale_discount if config else 0.10,
+            min_cash_buffer=config.min_cash_buffer if config else 2_000.0,
         )
         return LLMAgent(
             model=args.model or os.getenv("DEFAULT_MODEL", "gpt-4.1-mini"),
@@ -576,6 +578,8 @@ def build_agent(args, config=None) -> object:
             energy_threshold_for_upskill=config.energy_threshold_for_upskill if config else 0.4,
             occupations=occupation_details,
             persona=persona,
+            forced_sale_discount=config.forced_sale_discount if config else 0.10,
+            min_cash_buffer=config.min_cash_buffer if config else 2_000.0,
         )
     elif args.agent == "random":
         return RandomAgent(seed=args.seed)

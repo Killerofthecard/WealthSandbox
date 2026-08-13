@@ -24,6 +24,8 @@ class CareerMove(str, Enum):
     WITHDRAW = "withdraw"                       # move savings to cash
     BORROW = "borrow"                           # take a bank loan
     REPAY = "repay"                             # repay bank loan
+    BUY_STOCK = "buy_stock"                     # move cash into stock index fund
+    SELL_STOCK = "sell_stock"                   # sell stocks (T+1 settlement)
 
 
 class JobStatus(str, Enum):
@@ -97,6 +99,14 @@ class AgentState:
     intensive_work_months_remaining: int = 0
     training_months_remaining: int = 0
     training_target_occupation: str = ""
+
+    # Stock market
+    stock_value: float = 0.0                   # market value of stock holdings
+    pending_settlement: float = 0.0            # sale proceeds, available next month
+    total_invested: float = 0.0                # cumulative net capital deployed
+    last_month_stock_return: float = 0.0       # sp500_tr from the most recent month
+    _this_month_stock_purchases: float = 0.0   # internal: new purchases excluded from return
+    _this_month_stock_sales: float = 0.0       # internal: sales deferred to next tick
 
     # History / events
     career_history: List[Dict[str, Any]] = field(default_factory=list)

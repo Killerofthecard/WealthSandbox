@@ -44,6 +44,8 @@ def _build_system_prompt(
     occ_skill_passive_months: int = 12,
     occupations: Optional[Dict[str, Any]] = None,
     persona: str = "",
+    forced_sale_discount: float = 0.10,
+    min_cash_buffer: float = 2_000.0,
 ) -> str:
     """Build the system prompt from actual configured costs and profile (no magic numbers).
 
@@ -114,14 +116,15 @@ def _build_system_prompt(
 # Game Rules
 
 You are an agent in a career & life simulation.  Your goal is to maximise
-your **net worth** (cash + savings − loan) by age {end_age}.
+your **net worth** (cash + savings + stocks + pending settlement − loan) by
+age {end_age}.
 
 You start at age {start_age} — you have {total_months} months.  Each turn is
 **one month** (12 turns = 1 year).
 
 ## How the game ends
 - Age {end_age} → your final net worth is scored.
-- Cash + savings ≤ $0 → **bankruptcy — you lose immediately.**
+- Net worth ≤ $0 → **bankruptcy — you lose immediately.**
 - Health ≤ 0 → **death — you lose immediately.**
 
 ## Work is automatic
@@ -141,32 +144,60 @@ Each turn you see an Economy Status: HEALTHY, SLUGGISH, WEAK, or RECESSION.
 This affects your income, layoff risk, and loan interest rates.  In
 recession, conserve cash and expect possible layoffs.
 
+## Stock Market
+You can invest in a stock index fund that tracks the broad market.  Stock
+values fluctuate monthly — they can go up OR down.  Key rules:
+- **buy_stock**: Your money only starts growing NEXT month.  Purchases do
+  NOT earn this month's market return.
+- **sell_stock**: Proceeds settle NEXT month.  The cash cannot cover this
+  month's living expenses or loan payments.
+- **Forced liquidation**: If cash and savings are both exhausted, stocks
+  are sold at a {forced_sale_discount:.0%} emergency discount to cover
+  shortfalls.
+- **Bankruptcy**: Net worth = cash + savings + stock value + pending
+  settlement − loan.  If ≤ $0, you lose.
+
 # Monthly Settlement — what happens automatically every month, in order
 
 1. **Income** — if employed, salary is added to cash.
-2. **Layoff check** — small chance of being laid off (higher in recession).
-3. **Your actions** — you call ALL the tools you need this month in ONE
+2. **Stock settlement & returns** — pending sale proceeds arrive in cash;
+   stock value updated by this month's market return.
+3. **Layoff check** — small chance of being laid off (higher in recession).
+4. **Your actions** — you call ALL the tools you need this month in ONE
    response.  After they execute, the month ends.  Plan ahead.
-4. **Living expenses** — ${living_expense:,.0f} deducted from cash (auto-withdrawn from
-   savings if cash runs short).
-5. **Bank interest** — savings earn interest; loan accrues interest, then
+5. **Living expenses** — ${living_expense:,.0f} deducted from cash (auto-withdrawn from
+   savings first, then stocks are force-sold at a discount if needed).
+6. **Bank interest** — savings earn interest; loan accrues interest, then
    2% of the loan balance is auto-repaid (min $50).
-6. **Health decline** — health decreases (rate depends on age).
-7. **Bankruptcy / death check** — game ends if cash + savings ≤ $0
-   or health ≤ 0.
+7. **Health decline** — health decreases (rate depends on age).
+8. **Bankruptcy / death check** — game ends if net worth ≤ $0 or health ≤ 0.
 
-You can act between steps 3 and 4.  Plan your borrow / deposit / repay
-decisions knowing that steps 4–7 always follow.
+You can act between steps 4 and 5.  Plan your borrow / deposit / repay
+decisions knowing that steps 5–8 always follow.
 
 # Your State — what each number means
 
 **Cash** (${initial_cash:,.0f} at start)
   Spending money.  Living expenses (${living_expense:,.0f}/mo) are deducted
-  from cash automatically.  If cash runs out, savings cover the shortfall.
+  from cash automatically.  If cash runs out, savings cover the shortfall,
+  then stocks are force-sold at a {forced_sale_discount:.0%} discount.
 
 **Savings** ($0 at start)
   Bank deposit earning monthly interest (federal funds rate / 12).
   Not auto-spent — a safety net.
+
+**Stocks** ($0 at start)
+  Stock index fund holdings.  Value fluctuates monthly with the market.
+  Shows: current value, last month's return (%), total invested, and
+  profit/loss.  Buy with `buy_stock`, sell with `sell_stock`.
+
+**Pending Settlement** ($0 at start)
+  Proceeds from stock sales that will arrive NEXT month.  Not available
+  for this month's expenses.
+
+**Net Worth**
+  Cash + Savings + Stocks + Pending Settlement − Loan.  If this drops
+  to ≤ $0, you go bankrupt and the game ends.
 
 **Loan** ($0 at start)
   Money you owe the bank.  Interest = (federal funds rate + 2%) / 12 per
@@ -214,6 +245,8 @@ The month ends after they execute — there is no second chance.
 | `withdraw(amount)` | Savings → cash.  Instant. | amount ≤ savings balance. |
 | `borrow(amount)` | Take a bank loan.  2% auto-repaid monthly. | Employed limit = 12× income.  Unemployed limit = $8,000. |
 | `repay(amount)` | Repay loan early.  Reduces interest. | amount ≤ cash, amount ≤ loan balance. |
+| `buy_stock(amount)` | Move cash into a stock index fund.  Value fluctuates monthly.  Purchases do NOT earn this month's return. | Must keep ≥${min_cash_buffer:,.0f} cash.  amount ≤ cash − ${min_cash_buffer:,.0f}. |
+| `sell_stock(amount)` | Sell stocks.  Proceeds settle NEXT month — cannot cover this month's expenses. | amount ≤ stock value.  Must hold stocks. |
 
 # Available Occupations
 
@@ -252,6 +285,8 @@ class LLMAgent:
         occupations: Optional[Dict[str, Any]] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
         persona: str = "",
+        forced_sale_discount: float = 0.10,
+        min_cash_buffer: float = 2_000.0,
     ):
         self.model = model or os.getenv("DEFAULT_MODEL", "gpt-4.1-mini")
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
@@ -272,6 +307,8 @@ class LLMAgent:
             occ_skill_passive_months=occ_skill_passive_months,
             occupations=occupations,
             persona=persona,
+            forced_sale_discount=forced_sale_discount,
+            min_cash_buffer=min_cash_buffer,
         )
 
         if not self.api_key:
@@ -297,6 +334,8 @@ class LLMAgent:
                 max_occ_skill=max_skill_level,
                 occ_skill_passive_months=occ_skill_passive_months,
                 occupations=occupations,
+                min_cash_buffer=min_cash_buffer,
+                forced_sale_discount=forced_sale_discount,
             )
 
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
@@ -444,6 +483,26 @@ class LLMAgent:
             f"Savings: ${ind.get('savings', 0):,.2f}",
             f"Loan: ${ind.get('loan_balance', 0):,.2f}",
         ]
+
+        stock_value = ind.get("stock_value", 0)
+        if stock_value > 0:
+            ret_pct = ind.get("last_month_stock_return", 0) * 100
+            invested = ind.get("total_invested", 0)
+            pnl = ind.get("stock_pnl", 0)
+            lines.append(
+                f"Stocks: ${stock_value:,.2f} "
+                f"(lost/gained {ret_pct:+.1f}% last month; "
+                f"invested ${invested:,.0f}, P&L: ${pnl:+,.0f})"
+            )
+
+        pending = ind.get("pending_settlement", 0)
+        if pending > 0:
+            lines.append(
+                f"Pending settlement: ${pending:,.2f} (available next month)"
+            )
+
+        net_worth = ind.get("net_worth", 0)
+        lines.append(f"Net worth: ${net_worth:,.2f}")
 
         upskill = ind.get("upskill_months_remaining", 0)
         if upskill > 0:

@@ -284,6 +284,73 @@ def guard_repay_amount(
 
 
 # ---------------------------------------------------------------------------
+# Stock guards
+# ---------------------------------------------------------------------------
+
+def guard_buy_stock(state: AgentState, career) -> GuardResult:
+    """Can the agent buy stocks?  Must have enough cash to keep a buffer."""
+    buffer = getattr(career, "living_expense", 2_000.0)
+    if state.cash <= buffer:
+        return GuardResult.reject(
+            "buy_stock_rejected_no_cash",
+            f"Not enough cash to invest while keeping ${buffer:,.0f} for expenses.",
+        )
+    return GuardResult.ok()
+
+
+def guard_buy_stock_amount(
+    state: AgentState, career, amount: float
+) -> GuardResult:
+    """Validate the specific buy *amount*."""
+    buffer = getattr(career, "living_expense", 2_000.0)
+    if amount <= 0:
+        return GuardResult.reject(
+            "buy_stock_rejected_amount_zero",
+            "Investment amount must be greater than zero.",
+        )
+    if amount > state.cash:
+        return GuardResult.reject(
+            "buy_stock_rejected_amount_exceeds_cash",
+            f"Cannot invest ${amount:,.0f} — only have ${state.cash:,.0f} cash.",
+        )
+    if state.cash - amount < buffer:
+        return GuardResult.reject(
+            "buy_stock_rejected_buffer",
+            f"Cannot invest ${amount:,.0f} — need at least "
+            f"${buffer:,.0f} remaining for living expenses.",
+        )
+    return GuardResult.ok()
+
+
+def guard_sell_stock(state: AgentState, career) -> GuardResult:
+    """Can the agent sell stocks?  Must have stock_value > 0."""
+    if state.stock_value <= 0:
+        return GuardResult.reject(
+            "sell_stock_rejected_no_stocks",
+            "No stocks to sell — stock_value is $0.",
+        )
+    return GuardResult.ok()
+
+
+def guard_sell_stock_amount(
+    state: AgentState, career, amount: float
+) -> GuardResult:
+    """Validate the specific sell *amount*."""
+    if amount <= 0:
+        return GuardResult.reject(
+            "sell_stock_rejected_amount_zero",
+            "Sell amount must be greater than zero.",
+        )
+    if amount > state.stock_value:
+        return GuardResult.reject(
+            "sell_stock_rejected_amount_exceeds_holdings",
+            f"Cannot sell ${amount:,.0f} — stock holdings only worth "
+            f"${state.stock_value:,.0f}.",
+        )
+    return GuardResult.ok()
+
+
+# ---------------------------------------------------------------------------
 # ActionValidator
 # ---------------------------------------------------------------------------
 
@@ -302,6 +369,8 @@ class ActionValidator:
         self.register(CareerMove.WITHDRAW, guard_withdraw)
         self.register(CareerMove.BORROW, guard_borrow)
         self.register(CareerMove.REPAY, guard_repay)
+        self.register(CareerMove.BUY_STOCK, guard_buy_stock)
+        self.register(CareerMove.SELL_STOCK, guard_sell_stock)
 
         # Energy gate for upskill and intensive_work
         threshold = energy_threshold
@@ -362,6 +431,18 @@ class ActionValidator:
         if not result.allowed:
             return result
         return guard_repay_amount(state, self._career, action.amount)
+
+    def validate_buy_stock(self, action: Action, state: AgentState) -> GuardResult:
+        result = self.validate(action, state)
+        if not result.allowed:
+            return result
+        return guard_buy_stock_amount(state, self._career, action.amount)
+
+    def validate_sell_stock(self, action: Action, state: AgentState) -> GuardResult:
+        result = self.validate(action, state)
+        if not result.allowed:
+            return result
+        return guard_sell_stock_amount(state, self._career, action.amount)
 
     def available_actions(self, state: AgentState) -> Dict[str, dict]:
         result: Dict[str, dict] = {}

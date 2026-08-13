@@ -107,3 +107,9 @@ class EnvConfig:
 
     # ---- misc ----
     seed: Optional[int] = None
+
+    # ---- stock market ----
+    stock_data_file: str = "stock_monthly.csv"
+    forced_sale_discount: float = 0.10
+    require_stock_data: bool = True
+    min_cash_buffer: float = 2_000.0           # minimum cash to keep after stock purchase
