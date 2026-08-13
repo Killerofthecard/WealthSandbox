@@ -44,6 +44,10 @@ class MacroLayer:
 
         # Cycle data
         self._data_dir: str = config.macro_data_dir
+        if not os.path.isabs(self._data_dir):
+            # 相对路径锚定到项目根目录（wealthsandbox/ 的上一级），避免受运行时 cwd 影响
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self._data_dir = os.path.join(project_root, self._data_dir)
         self._cycle_override: str = config.macro_cycle  # "" = random
         self._file_override: str = config.macro_cycle_file  # specific CSV file
         self._rng = random.Random(config.seed if config.seed is not None else 42)

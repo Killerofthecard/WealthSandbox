@@ -29,6 +29,9 @@ from typing import Dict, List, Optional
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
+# 项目根目录（脚本所在目录），用于锚定默认轨迹输出路径，避免受运行时 cwd 影响
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 from wealthsandbox import WealthSandBoxEnv, EnvConfig
 from wealthsandbox.agents import LLMAgent, Decision, ToolCall
 from wealthsandbox.types import Action, CareerMove
@@ -712,12 +715,16 @@ def main() -> int:
     model_slug = model_name.replace("/", "_").replace(" ", "_")
 
     # ---- Open trajectory file (JSONL crash-safe, finalised to JSON) ----
-    os.makedirs("trajectories", exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     if args.save:
-        jsonl_path = args.save if args.save.endswith(".jsonl") else args.save + ".jsonl"
+        # 显式指定路径；相对路径也锚定到脚本目录，避免受运行时 cwd 影响
+        save_path = args.save if os.path.isabs(args.save) else os.path.join(BASE_DIR, args.save)
+        jsonl_path = save_path if save_path.endswith(".jsonl") else save_path + ".jsonl"
+        os.makedirs(os.path.dirname(jsonl_path) or ".", exist_ok=True)
     else:
-        jsonl_path = f"trajectories/{model_slug}_{ts}.jsonl"
+        traj_dir = os.path.join(BASE_DIR, "trajectories")
+        os.makedirs(traj_dir, exist_ok=True)
+        jsonl_path = os.path.join(traj_dir, f"{model_slug}_{ts}.jsonl")
 
     run_meta = {
         "timestamp": datetime.now().isoformat(),
