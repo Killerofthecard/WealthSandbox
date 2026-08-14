@@ -191,9 +191,9 @@ class TestAssetIntegration(unittest.TestCase):
         self.assertFalse(info.get("action_rejected"))
         # Settlement is deferred to finalize, so after full step it appears
         self.assertAlmostEqual(env.micro.state.pending_settlement, 500)
-        # Remaining stock may have grown slightly from market return during tick
-        self.assertGreater(env.micro.state.stock_value, 500)
-        self.assertLess(env.micro.state.stock_value, 520)  # not too much growth
+        # Remaining stock = $500 marked-to-market by this month's return.
+        ret = env.micro.state.last_month_stock_return
+        self.assertAlmostEqual(env.micro.state.stock_value, 500 * (1 + ret), places=2)
 
     def test_sell_settlement_arrives_next_month(self):
         """T+1: sale cash should arrive in the NEXT month's tick."""
@@ -218,8 +218,8 @@ class TestAssetIntegration(unittest.TestCase):
         """Buying stock when cash would go below buffer should be rejected."""
         env = WealthSandBoxEnv(EnvConfig(seed=1))
         env.reset(seed=1)
-        # Agent has $10,000 cash. Try to buy $9,000 → would leave $1,000 < $2,000 buffer
-        action = Action(career_move=CareerMove.BUY_STOCK, amount=9_000)
+        # Agent has $100,000 cash. Buy $99,000 → leaves $1,000 < $2,000 buffer.
+        action = Action(career_move=CareerMove.BUY_STOCK, amount=99_000)
         obs, reward, done, info = env.step(action=action)
         self.assertTrue(info.get("action_rejected"))
 
@@ -348,14 +348,11 @@ class TestAssetIntegration(unittest.TestCase):
     def test_2008_october_crash_event(self):
         """Integration: buy stocks through 2008, verify October crash event.
 
-        Uses start_year=2008 so the macro calendar aligns with the 2008
-        recession scenario AND the stock data lookup returns 2008 values.
-        SP500_TR for 2008-10 ≈ -0.16873 (-16.9%).
+        SP500_TR now lives in the cycle CSV row, so replaying the 2008-2009
+        scenario naturally feeds October's crash (-20.2%) to AssetSystem.
         """
         env = WealthSandBoxEnv(EnvConfig(
             seed=42,
-            start_year=2008,
-            start_month=1,
             macro_cycle="recession",
             macro_cycle_file="2008_2009.csv",
         ))
@@ -385,8 +382,7 @@ class TestAssetIntegration(unittest.TestCase):
         stock_events = [e for e in events if "stock holdings" in e.lower()]
         self.assertTrue(len(stock_events) > 0, f"Expected stock event, got events: {events}")
 
-        # With start_year=2008, the stock data lookup returns 2008-10's return.
-        # sp500_tr for 2008-10 should be strongly negative.
+        # October 2008's return is strongly negative (-20.2%).
         self.assertIn("lost", stock_events[0].lower())
 
 

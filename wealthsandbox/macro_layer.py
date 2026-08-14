@@ -1,10 +1,17 @@
 """Macro-layer: drives external economic conditions from real historical data.
 
-Reads UNRATE and USRECM (NBER recession flag) from pre-processed cycle CSVs.
-These two parameters flow into CareerSystem where they affect layoff probability,
-rehire probability, and industry income multipliers.  The agent does NOT see
-UNRATE / USRECM directly — it only feels the effects (layoffs, rehire
-difficulty, income changes).
+Reads UNRATE, USRECM (NBER recession flag), FEDFUNDS, and SP500_TR from
+pre-processed cycle CSVs.  All four live in the SAME row, so the stock return
+is always aligned with the labour-market conditions of that exact month — there
+is no separate calendar to drift out of sync with.
+
+These parameters flow into CareerSystem (layoff probability, rehire
+probability, industry income multipliers) and AssetSystem (stock returns).
+The agent does NOT see UNRATE / USREC / FEDFUNDS / SP500_TR directly — it only
+feels their effects (layoffs, rehire difficulty, income changes, stock moves).
+
+Time is measured purely as an elapsed-month counter (``total_months``).  There
+is no calendar year; the scenario replays a cycle's rows in order.
 
 Set ``macro_cycle`` in EnvConfig to "boom", "normal", or "recession" to lock
 a specific cycle type.  Leave empty (default) for random selection.
@@ -18,27 +25,20 @@ from typing import Any, Dict, List, Optional, Tuple
 from wealthsandbox.config import EnvConfig
 
 
-# ---------------------------------------------------------------------------
-# MacroLayer
-# ---------------------------------------------------------------------------
-
 class MacroLayer:
-    """Tracks calendar time and provides UNRATE + USRECM + stock data to systems."""
+    """Tracks elapsed months and provides UNRATE + USREC + FEDFUNDS + SP500_TR
+    to systems, read straight from the selected cycle's rows."""
 
     def __init__(self, config: EnvConfig):
-        self.year: int = config.start_year
-        self.month: int = config.start_month
         self._month_counter: int = 0
 
-        # Current values (consumed by CareerSystem + AssetSystem)
+        # Current values (consumed by CareerSystem + AssetSystem + BankSystem)
         self.unrate: float = 0.05      # decimal (e.g. 0.054 = 5.4%)
         self.usrecm: int = 0           # 0 or 1
         self.fedfunds: float = 3.0     # % (e.g. 5.25 = 5.25%)
         self.sp500_tr: float = 0.0     # S&P 500 total return this month
-        self.gs10: float = 3.0         # 10-year Treasury rate (%)
-        self._has_stock_data: bool = False
 
-        # Which cycles are being used
+        # Which cycle is being used
         self.current_cycle_label: str = ""
         self.current_cycle_file: str = ""
 
@@ -51,13 +51,10 @@ class MacroLayer:
         self._cycle_override: str = config.macro_cycle  # "" = random
         self._file_override: str = config.macro_cycle_file  # specific CSV file
         self._rng = random.Random(config.seed if config.seed is not None else 42)
-        self._rows: List[Tuple[int, int, float, int, float]] = []  # (year, month, unrate, usrecm, fedfunds)
-        self._row_idx: int = 0
 
-        # Stock data index: (year, month) -> (sp500_tr, gs10)
-        self._stock_data: Dict[Tuple[int, int], Tuple[float, float]] = {}
-        self._require_stock: bool = config.require_stock_data
-        self._load_stock_data(config)
+        # Rows: (unrate, usrecm, fedfunds, sp500_tr) — one per month, in order.
+        self._rows: List[Tuple[float, int, float, float]] = []
+        self._row_idx: int = 0
 
         self._load_next_cycle()
 
@@ -70,58 +67,37 @@ class MacroLayer:
         return self._month_counter
 
     def step(self) -> Dict[str, Any]:
-        """Advance the calendar by one month and read next macro row."""
+        """Advance by one month and read the next macro row."""
         self._month_counter += 1
-        self.month += 1
-        if self.month > 12:
-            self.month = 1
-            self.year += 1
 
         if self._row_idx < len(self._rows):
-            _, _, self.unrate, self.usrecm, self.fedfunds = self._rows[self._row_idx]
+            self.unrate, self.usrecm, self.fedfunds, self.sp500_tr = self._rows[self._row_idx]
             self._row_idx += 1
         else:
             self._load_next_cycle()
             if self._rows:
-                _, _, self.unrate, self.usrecm, self.fedfunds = self._rows[0]
+                self.unrate, self.usrecm, self.fedfunds, self.sp500_tr = self._rows[0]
                 self._row_idx = 1
-
-        # Look up stock data for the NEW (current) month
-        key = (self.year, self.month)
-        if key in self._stock_data:
-            self.sp500_tr, self.gs10 = self._stock_data[key]
-            self._has_stock_data = True
-        else:
-            self.sp500_tr = 0.0
-            self.gs10 = 0.0
-            self._has_stock_data = False
 
         return self.snapshot()
 
     def snapshot(self) -> Dict[str, Any]:
         """Return current state (consumed by env and systems)."""
         return {
-            "year": self.year,
-            "month": self.month,
             "total_months": self._month_counter,
             "unrate": self.unrate,
             "usrecm": self.usrecm,
             "fedfunds": self.fedfunds,
             "sp500_tr": self.sp500_tr,
-            "gs10": self.gs10,
         }
 
     def reset(self) -> None:
         self._month_counter = 0
-        self.year = 2024
-        self.month = 1
         self._row_idx = 0
         self.unrate = 0.05
         self.usrecm = 0
         self.fedfunds = 3.0
         self.sp500_tr = 0.0
-        self.gs10 = 3.0
-        self._has_stock_data = False
         self._load_next_cycle()
 
     # ------------------------------------------------------------------
@@ -141,7 +117,6 @@ class MacroLayer:
 
         # 1. Specific file override
         if self._file_override:
-            # Search in all three directories
             for label in ("boom", "normal", "recession"):
                 candidate = os.path.join(self._data_dir, label, self._file_override)
                 if os.path.isfile(candidate):
@@ -184,55 +159,11 @@ class MacroLayer:
                 for row in csv.DictReader(f):
                     ff_str = row.get("FEDFUNDS", "").strip()
                     fedfunds = float(ff_str) if ff_str else 3.0
+                    sp_str = row.get("SP500_TR", "").strip()
+                    sp500_tr = float(sp_str) if sp_str else 0.0
                     self._rows.append((
-                        int(row["year"]),
-                        int(row["month"]),
                         float(row["UNRATE"]) / 100.0,
                         int(row["USREC"]),
                         fedfunds,
+                        sp500_tr,
                     ))
-
-        # Validate stock data coverage for loaded rows
-        if self._require_stock and self._rows:
-            missing: List[str] = []
-            for year, month, _, _, _ in self._rows:
-                if (year, month) not in self._stock_data:
-                    missing.append(f"{year}-{month:02d}")
-            if missing:
-                raise RuntimeError(
-                    f"Stock data missing for {len(missing)} months in "
-                    f"'{self.current_cycle_file}' ({pick_label} cycle): "
-                    f"{missing[:5]}{'...' if len(missing) > 5 else ''}.  "
-                    f"Ensure '{self._data_dir}/stock_monthly.csv' covers "
-                    f"the scenario date range."
-                )
-
-    # ------------------------------------------------------------------
-    # Stock data loading
-    # ------------------------------------------------------------------
-
-    def _load_stock_data(self, config: EnvConfig) -> None:
-        """Load preprocessed stock_monthly.csv into a lookup dict."""
-        stock_path = os.path.join(self._data_dir, config.stock_data_file)
-        if not os.path.isfile(stock_path):
-            if self._require_stock:
-                raise FileNotFoundError(
-                    f"Stock data file not found: {stock_path}.  "
-                    f"Run 'python scripts/prepare_stock_data.py' first, "
-                    f"or set require_stock_data=False in EnvConfig."
-                )
-            return
-
-        with open(stock_path, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                y = int(row["year"])
-                m = int(row["month"])
-                tr_str = row.get("SP500_TR", "").strip()
-                gs10_str = row.get("GS10", "").strip()
-                # Skip rows with missing return (first row is always NaN)
-                if not tr_str:
-                    continue
-                sp500_tr = float(tr_str)
-                gs10 = float(gs10_str) if gs10_str else 0.0
-                self._stock_data[(y, m)] = (sp500_tr, gs10)

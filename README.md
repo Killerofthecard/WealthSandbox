@@ -140,7 +140,7 @@ MacroLayer 从 FRED 历史数据驱动经济周期。`raw_data/` 下有三个周
 
 ### 数据来源
 
-股票数据来自 **Robert Shiller 的 S&P 500 历史数据集**（1871 年至今），预处理脚本 `scripts/prepare_stock_data.py` 将原始 Excel 转为 `raw_data/stock_monthly.csv`：
+股票数据来自 **Robert Shiller 的 S&P 500 历史数据集**（1871 年至今）。预处理脚本 `scripts/prepare_stock_data.py` 将原始 Excel 转为 `raw_data/stock_monthly.csv`，再由 `scripts/add_sp500_to_cycles.py` 把 `SP500_TR` 并入各宏观 cycle CSV（`raw_data/{boom,normal,recession}/*.csv`），确保股票收益与宏观指标同月对齐：
 
 | 列 | 含义 |
 |---|---|
@@ -374,7 +374,7 @@ messages = [
 ```python
 EnvConfig(
     # 时间
-    end_age=60, start_year=2024, start_month=1,
+    end_age=60,
 
     # 职业成本
     monthly_living_expense=2000.0,
@@ -396,10 +396,8 @@ EnvConfig(
     intensive_work_months=3,
     occ_skill_passive_months=12,
 
-    # 股票
-    stock_data_file="stock_monthly.csv",   # Shiller S&P 500 数据
+    # 股票（SP500_TR 收益已并入各 cycle CSV，与宏观同月对齐）
     forced_sale_discount=0.10,             # 强制清算折价率
-    require_stock_data=True,               # 股票数据必须覆盖模拟时段
     min_cash_buffer=2_000.0,               # 买入股票后现金最低保留额
 
     # 宏观
@@ -435,7 +433,7 @@ EnvConfig(
         "tool_calls": [{"tool_name": "switch_occupation", "parameters": {"occupation_id": "manufacturing_worker"}}]
       },
       "state_after": {
-        "month": 1, "year": 2024, "age": 20,
+        "month": 1, "age": 20,
         "cash": 6036.20, "savings": 0.0, "loan_balance": 0.0,
         "stock_value": 0.0, "pending_settlement": 0.0, "total_invested": 0.0,
         "last_month_stock_return": 0.0,
@@ -477,14 +475,15 @@ sandbox/
 │   └── recession/                    # 衰退周期
 ├── trajectories/                     # 轨迹输出
 ├── scripts/                            # 数据预处理
-│   └── prepare_stock_data.py           #   Shiller 数据清洗 → stock_monthly.csv
+│   ├── prepare_stock_data.py           #   Shiller 数据清洗 → stock_monthly.csv
+│   └── add_sp500_to_cycles.py          #   把 SP500_TR 并入各 cycle CSV
 │
 └── wealthsandbox/
     ├── __init__.py                   # 导出 WealthSandBoxEnv, EnvConfig
     ├── config.py                     # 常量 + EnvConfig dataclass
     ├── types.py                      # Action, Observation, AgentState, CareerMove, JobStatus, Tier
     ├── profile.py                    # AgentProfile（agent 初始条件）
-    ├── macro_layer.py                # 日历 + FRED 宏观数据驱动
+    ├── macro_layer.py                # 月份计数 + 宏观/股票数据驱动（UNRATE/USREC/FEDFUNDS/SP500_TR）
     ├── micro_layer.py                # AgentState 工厂
     ├── validator.py                  # ActionValidator + 全部 guard 函数
     ├── env.py                        # 主环境：三阶段 step/reset/observation

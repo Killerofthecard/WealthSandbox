@@ -134,15 +134,13 @@ class Observation:
         individual: Snapshot of the AgentState as a plain dict.
         macro: Snapshot of visible macro variables as a plain dict.
         narrative: Natural-language summary of the month (useful for LLM Agents).
-        year: Current calendar year.
-        month: Current month (1-12).
+        month: Elapsed months since the start of the episode (1-based).
         done: Whether the episode has terminated.
         info: Diagnostic metadata.
     """
     individual: Dict[str, Any] = field(default_factory=dict)
     macro: Dict[str, Any] = field(default_factory=dict)
     narrative: str = ""
-    year: int = 2024
-    month: int = 1
+    month: int = 0
     done: bool = False
     info: Dict[str, Any] = field(default_factory=dict)

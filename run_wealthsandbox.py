@@ -202,11 +202,10 @@ class MockAgent:
 # ---------------------------------------------------------------------------
 # Printing routines
 # ---------------------------------------------------------------------------
-def print_step_header(step: int, year: int, month: int, age: int) -> None:
+def print_step_header(step: int, age: int) -> None:
     print(f"\n{C.DIM}{'─' * 80}{C.RESET}")
     print(
-        f"{C.BOLD}🔄 Step {step:>3}  |  📅 {year}-{month:02d}  "
-        f"|  🎂 Age {age}{C.RESET}"
+        f"{C.BOLD}🔄 Step {step:>3}  |  🎂 Age {age}{C.RESET}"
     )
     print(f"{C.DIM}{'─' * 80}{C.RESET}")
 
@@ -695,8 +694,7 @@ def main() -> int:
         "intensive_work_months_remaining": s.intensive_work_months_remaining,
         "training_months_remaining": s.training_months_remaining,
         "training_target_occupation": s.training_target_occupation,
-        "year": env.macro.year,
-        "month": env.macro.month,
+        "month": env.macro.total_months,
     }
     # Capture system prompt (LLM agent only)
     system_prompt: Optional[str] = None
@@ -750,7 +748,7 @@ def main() -> int:
     termination_reason = ""
 
     while not done and months_completed < args.months:
-        print_step_header(months_completed + 1, obs.year, obs.month, obs.individual.get("age", 20))
+        print_step_header(months_completed + 1, obs.individual.get("age", 20))
         print_environment_state(obs)
 
         # ---- Single decision + retry on rejection -------------------------

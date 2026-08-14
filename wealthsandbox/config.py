@@ -16,8 +16,6 @@ from wealthsandbox.profile import AgentProfile
 # Time
 # ---------------------------------------------------------------------------
 END_AGE = 60                     # default age at which the episode terminates
-START_YEAR = 2024
-START_MONTH = 1
 
 # ---------------------------------------------------------------------------
 # Career / skill
@@ -58,8 +56,6 @@ class EnvConfig:
 
     # ---- time ----
     end_age: int = END_AGE
-    start_year: int = START_YEAR
-    start_month: int = START_MONTH
 
     # ---- career costs (no hardcoded defaults in logic — all driven from here) ----
     monthly_living_expense: float = MONTHLY_LIVING_EXPENSE
@@ -96,7 +92,5 @@ class EnvConfig:
     seed: Optional[int] = None
 
     # ---- stock market ----
-    stock_data_file: str = "stock_monthly.csv"
     forced_sale_discount: float = 0.10
-    require_stock_data: bool = True
     min_cash_buffer: float = 2_000.0           # minimum cash to keep after stock purchase

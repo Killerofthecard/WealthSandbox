@@ -481,7 +481,7 @@ class LLMAgent:
         # Detect retry: narrative starts with rejection warning
         is_retry = obs.narrative.startswith("⚠️ LAST ACTION REJECTED:")
 
-        header = f"=== {obs.year}-{obs.month:02d} (month {obs.info.get('total_months', '?')})"
+        header = f"=== Month {obs.month} (step {obs.info.get('total_months', '?')})"
         if is_retry:
             header += " — ⚠️ RETRY: your last action was rejected, try something else ==="
 

@@ -301,8 +301,6 @@ class WealthSandBoxEnv:
         # ---- Phase 4: archive + observation --------------------------------
         self.history.append({
             "month": self.macro.total_months,
-            "year": self.macro.year,
-            "cal_month": self.macro.month,
             "age": state.age,
             "cash": round(state.cash, 2),
             "savings": round(state.savings, 2),
@@ -379,7 +377,7 @@ class WealthSandBoxEnv:
                 tier_name = occ.tiers[idx].name + " "
         occ_skill = s.occupation_skills.get(s.occupation_id, 0)
         lines = [
-            f"Year {self.macro.year} Month {self.macro.month:02d} | Age {s.age}",
+            f"Month {self.macro.total_months} | Age {s.age}",
             f"  Job: {s.job_status.value} | Occupation: {tier_name}{s.occupation_id or 'none'}{occ_name}",
             f"  General skill: {s.general_skill} | Occ skill: {occ_skill} | Tenure: {s.tenure_months}mo",
             f"  Monthly income: ${s.monthly_after_tax_income:,.2f} | Cash: ${s.cash:,.2f}",
@@ -584,7 +582,7 @@ class WealthSandBoxEnv:
         ) if self.micro.state.occupation_id else 0
 
         narrative = (
-            f"Month {self.macro.month}/{self.macro.year}. "
+            f"Month {self.macro.total_months}. "
             f"Age {self.micro.state.age}, "
             f"{self.micro.state.job_status.value}"
         )
@@ -651,8 +649,7 @@ class WealthSandBoxEnv:
             individual=self.micro.snapshot(),
             macro=macro_snapshot,
             narrative=narrative,
-            year=self.macro.year,
-            month=self.macro.month,
+            month=self.macro.total_months,
             done=False,
             info={"total_months": self.macro.total_months},
         )
