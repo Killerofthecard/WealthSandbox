@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Preprocess Shiller stock data for WealthSandBox.
 
-Input: ``raw_data/stock_data.csv`` — actually an .xlsx file with 4 columns:
-    Date, S&P Comp. P, Dividend D, Long Interest Rate GS10
+Input: ``raw_data/stock_data.csv`` — actually an .xlsx file with 5 columns:
+    Date, S&P Comp. P, Dividend D, Long Interest Rate GS10, CPI
 
 Shiller date quirk:
     Date is a float in YYYY.MM format but Excel drops trailing zeros, so
@@ -15,7 +15,7 @@ Calculation:
     SP500_TR[t] = (P[t] + D[t]/12) / P[t-1] - 1     # nominal monthly total return
     GS10 carried through as-is (percentage points).
 
-Output: ``raw_data/stock_monthly.csv`` with columns: year, month, GS10, SP500_TR
+Output: ``raw_data/stock_monthly.csv`` with columns: year, month, GS10, SP500_TR, CPI
 """
 
 import os
@@ -71,6 +71,7 @@ def main() -> None:
         "month": month,
         "GS10": gs10,
         "SP500_TR": df["SP500_TR"],
+        "CPI": df["CPI"],
     })
     out.to_csv(output_path, index=False)
     print(f"Wrote {len(out)} rows to {output_path}")

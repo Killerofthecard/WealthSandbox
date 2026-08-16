@@ -20,7 +20,7 @@ from wealthsandbox.config import EnvConfig
 from wealthsandbox.macro_layer import MacroLayer
 from wealthsandbox.micro_layer import MicroLayer
 from wealthsandbox.types import Action, Observation, AgentState, CareerMove
-from wealthsandbox.agents.tools import ToolCall, SWITCH_OCCUPATION, UPSKILL, INTENSIVE_WORK, QUIT_JOB, DEPOSIT, WITHDRAW, BORROW, REPAY, BUY_STOCK, SELL_STOCK
+from wealthsandbox.agents.tools import ToolCall, SWITCH_OCCUPATION, UPSKILL, INTENSIVE_WORK, QUIT_JOB, DEPOSIT, WITHDRAW, BORROW, REPAY, BUY_STOCK, SELL_STOCK, REST, MEDICAL_CARE
 from wealthsandbox.systems.base import BaseSystem
 from wealthsandbox.systems.career import CareerSystem
 from wealthsandbox.systems.living import LivingExpenseSystem
@@ -109,6 +109,7 @@ def _build_default_systems(config: EnvConfig) -> List[BaseSystem]:
             intensive_work_months=config.intensive_work_months,
             occ_skill_passive_months=config.occ_skill_passive_months,
             layoff_base_rate=config.layoff_base_rate,
+            rest_income_penalty=config.rest_income_penalty,
             seed=config.seed,
         ),
         asset,
@@ -117,6 +118,7 @@ def _build_default_systems(config: EnvConfig) -> List[BaseSystem]:
             cost_per_intensive_work=config.energy_cost_per_intensive_work,
             decline_per_training_month=config.energy_decline_per_training_month,
             recovery_per_month=config.energy_recovery_per_month,
+            rest_energy_gain=config.rest_energy_gain,
         ),
         LivingExpenseSystem(
             monthly_living_expense=config.monthly_living_expense,
@@ -128,6 +130,10 @@ def _build_default_systems(config: EnvConfig) -> List[BaseSystem]:
             decline_30_39=config.health_decline_30_39,
             decline_40_49=config.health_decline_40_49,
             decline_50_plus=config.health_decline_50_plus,
+            rest_health_gain=config.rest_health_gain,
+            medical_care_cost=config.medical_care_cost,
+            medical_care_health_gain=config.medical_care_health_gain,
+            health_max=config.health_max,
         ),
         AgingSystem(end_age=config.end_age),
     ]
@@ -192,6 +198,8 @@ class WealthSandBoxEnv:
         self.validator = ActionValidator(
             self.career,
             energy_threshold=config.energy_threshold_for_upskill,
+            medical_care_cost=config.medical_care_cost,
+            medical_care_max_per_year=config.medical_care_max_per_year,
         )
 
         self.history: List[Dict[str, Any]] = []
@@ -247,6 +255,7 @@ class WealthSandBoxEnv:
 
         state = self.micro.state
         state.last_month_events.clear()
+        state.monthly_flow = {}
 
         # ---- Phase 1: validate + execute actions -------------------------
         # Validate on a deepcopy so rejections leave real state untouched.
@@ -298,6 +307,14 @@ class WealthSandBoxEnv:
 
         state.cash = max(0.0, state.cash)
 
+        # ---- Reward: decomposed net-worth change for the month ------------
+        # Each system recorded its net-worth flows into state.monthly_flow;
+        # the scalar reward is their sum (== this month's change in net worth,
+        # since balance-neutral transfers cancel out).
+        reward = round(sum(state.monthly_flow.values()), 2)
+        for key, val in state.monthly_flow.items():
+            state.cumulative_flow[key] = state.cumulative_flow.get(key, 0.0) + val
+
         # ---- Phase 4: archive + observation --------------------------------
         self.history.append({
             "month": self.macro.total_months,
@@ -330,10 +347,15 @@ class WealthSandBoxEnv:
                 "cycle_file": getattr(self.macro, "current_cycle_file", ""),
                 "economy_status": _economy_status(self.macro.unrate, self.macro.usrecm),
             },
+            # Reward decomposition: this month's component flows + running totals.
+            "reward": reward,
+            "flow": {k: round(v, 2) for k, v in sorted(state.monthly_flow.items())},
+            "cumulative_flow": {
+                k: round(v, 2) for k, v in sorted(state.cumulative_flow.items())
+            },
         })
 
         obs = self._make_observation()
-        reward = state.monthly_after_tax_income
         info: Dict[str, Any] = {"termination_reason": reason}
         return obs, reward, done, info
 
@@ -452,6 +474,14 @@ class WealthSandBoxEnv:
                         "health_decline_30_39": self.config.health_decline_30_39,
                         "health_decline_40_49": self.config.health_decline_40_49,
                         "health_decline_50_plus": self.config.health_decline_50_plus,
+                        # wellbeing (health recovery via rest / medical_care)
+                        "health_max": self.config.health_max,
+                        "rest_health_gain": self.config.rest_health_gain,
+                        "rest_energy_gain": self.config.rest_energy_gain,
+                        "rest_income_penalty": self.config.rest_income_penalty,
+                        "medical_care_cost": self.config.medical_care_cost,
+                        "medical_care_health_gain": self.config.medical_care_health_gain,
+                        "medical_care_max_per_year": self.config.medical_care_max_per_year,
                         # energy (stamina / pacing)
                         "energy_cost_per_upskill": self.config.energy_cost_per_upskill,
                         "energy_decline_per_training_month": self.config.energy_decline_per_training_month,
@@ -539,6 +569,10 @@ class WealthSandBoxEnv:
                     career_move=CareerMove.SELL_STOCK,
                     amount=float(params.get("amount", 0)),
                 ))
+            elif tc.tool_name == REST:
+                actions.append(Action(career_move=CareerMove.REST))
+            elif tc.tool_name == MEDICAL_CARE:
+                actions.append(Action(career_move=CareerMove.MEDICAL_CARE))
 
         if not actions:
             actions.append(Action(career_move=CareerMove.NONE))
@@ -561,7 +595,8 @@ class WealthSandBoxEnv:
             macro_snapshot.get("usrecm", 0),
         )
         macro_snapshot["switch_base_cost"] = self.career.switch_base_cost
-        macro_snapshot["living_expense"] = self.career.living_expense
+        price_level = macro_snapshot.get("price_level", 1.0) or 1.0
+        macro_snapshot["living_expense"] = self.career.living_expense * price_level
         # Cash already includes this month's income (tick ran before observation).
         # No projection needed — use actual state for available_actions.
         macro_snapshot["available_actions"] = self.validator.available_actions(
@@ -619,8 +654,10 @@ class WealthSandBoxEnv:
             + self.micro.state.stock_value + self.micro.state.pending_settlement
             - self.micro.state.loan_balance
         )
+        price_level = macro_snapshot.get("price_level", 1.0) or 1.0
+        real_net_worth = net_worth / price_level
         narrative += (
-            f"Net worth: ${net_worth:,.0f}. "
+            f"Net worth: ${real_net_worth:,.0f} (inflation-adjusted). "
         )
         narrative += f"Energy: {self.micro.state.energy:.0%}. "
         narrative += f"Health: {self.micro.state.health:.3f}. "

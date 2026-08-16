@@ -44,6 +44,7 @@ class BankSystem(BaseSystem):
             interest = state.savings * monthly_save
             if interest > 0.01:
                 state.savings += interest
+                state.record_flow("savings_interest", interest)
                 state.last_month_events.append(
                     f"Savings interest: +${interest:,.2f} "
                     f"(rate {fedfunds:.1f}%/yr). Balance: ${state.savings:,.0f}."
@@ -54,6 +55,7 @@ class BankSystem(BaseSystem):
             interest = state.loan_balance * loan_rate
             if interest > 0.01:
                 state.loan_balance += interest
+                state.record_flow("loan_interest", -interest)
                 state.last_month_events.append(
                     f"Loan interest: +${interest:,.2f} "
                     f"(rate {fedfunds+2.0:.1f}%/yr). Balance: ${state.loan_balance:,.0f}."

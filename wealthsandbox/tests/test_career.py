@@ -79,6 +79,20 @@ class TestCareerSystem(unittest.TestCase):
         expected = 8800.0 * (1 - TAX_RATE)
         self.assertAlmostEqual(income, round(expected, 2), delta=0.1)
 
+    def test_salary_scales_with_price_level(self):
+        """Nominal salary grows with the CPI price level (cost-of-living adjustment)."""
+        state = AgentState(
+            occupation_id="software_engineer",
+            general_skill=3,
+            job_status=JobStatus.EMPLOYED,
+            occupation_skills={"software_engineer": 1},
+        )
+        self.sys.tick(state, {"price_level": 1.0})
+        base = self.sys.get_monthly_base_salary(state)
+        self.sys.tick(state, {"price_level": 2.0})
+        inflated = self.sys.get_monthly_base_salary(state)
+        self.assertAlmostEqual(inflated, base * 2.0, places=4)
+
     # --- Tick (auto income) ---
 
     def test_tick_auto_income_when_employed(self):
@@ -415,17 +429,17 @@ class TestHealthSystem(unittest.TestCase):
     def test_decline_rate_30s(self):
         s = self._state(35)
         self.hs.finalize(s, {})
-        self.assertAlmostEqual(s.health, 1.0 - 0.001)
+        self.assertAlmostEqual(s.health, 1.0 - 0.002)
 
     def test_decline_rate_40s(self):
         s = self._state(45)
         self.hs.finalize(s, {})
-        self.assertAlmostEqual(s.health, 1.0 - 0.003)
+        self.assertAlmostEqual(s.health, 1.0 - 0.006)
 
     def test_decline_rate_50_plus(self):
         s = self._state(55)
         self.hs.finalize(s, {})
-        self.assertAlmostEqual(s.health, 1.0 - 0.006)
+        self.assertAlmostEqual(s.health, 1.0 - 0.012)
 
     def test_death_when_health_zero(self):
         s = self._state(30, health=0.0001)

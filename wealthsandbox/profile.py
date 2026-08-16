@@ -26,7 +26,7 @@ class AgentProfile:
     """
 
     age: int = 20
-    initial_cash: float = 10_0000.0
+    initial_cash: float = 10_000.0
     initial_health: float = 1.0
     initial_energy: float = 1.0
     initial_general_skill: int = 1

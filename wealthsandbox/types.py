@@ -26,6 +26,8 @@ class CareerMove(str, Enum):
     REPAY = "repay"                             # repay bank loan
     BUY_STOCK = "buy_stock"                     # move cash into stock index fund
     SELL_STOCK = "sell_stock"                   # sell stocks (T+1 settlement)
+    REST = "rest"                               # rest to recover health + energy (costs income)
+    MEDICAL_CARE = "medical_care"               # pay cash to recover health
 
 
 class JobStatus(str, Enum):
@@ -100,6 +102,10 @@ class AgentState:
     training_months_remaining: int = 0
     training_target_occupation: str = ""
 
+    # Wellbeing (health recovery)
+    resting_this_month: bool = False        # set by `rest`; reduces this month's income
+    medical_care_uses_this_year: int = 0    # medical_care uses in the current year
+
     # Stock market
     stock_value: float = 0.0                   # market value of stock holdings
     pending_settlement: float = 0.0            # sale proceeds, available next month
@@ -111,6 +117,20 @@ class AgentState:
     # History / events
     career_history: List[Dict[str, Any]] = field(default_factory=list)
     last_month_events: List[str] = field(default_factory=list)
+
+    # Cash-flow ledger (reward decomposition)
+    monthly_flow: Dict[str, float] = field(default_factory=dict)     # this month's component flows
+    cumulative_flow: Dict[str, float] = field(default_factory=dict)  # running totals across months
+
+    def record_flow(self, key: str, amount: float) -> None:
+        """Add *amount* to this month's flow ledger under *key*.
+
+        ``amount`` is a net-worth delta: positive for inflows (income,
+        interest, stock gains), negative for outflows (expenses, costs,
+        interest paid, losses).  Balance-neutral transfers (deposit/withdraw,
+        borrow/repay, buy/sell) are deliberately NOT recorded.
+        """
+        self.monthly_flow[key] = self.monthly_flow.get(key, 0.0) + amount
 
 
 @dataclass

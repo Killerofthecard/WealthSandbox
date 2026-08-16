@@ -1,6 +1,6 @@
 # WealthSandBox — Career & Life Simulation Sandbox
 
-一个研究 LLM agent 长期经济决策行为的沙盒环境。agent 从无业青年出发，在真实的宏观经济周期（FRED 历史数据驱动）和有限寿命约束下，通过职业选择、技能投资、股票投资、银行理财、借贷等决策，最大化最终净资产。
+一个研究 LLM agent 长期经济决策行为的沙盒环境。agent 从无业青年出发，在真实的宏观经济周期（FRED 历史数据驱动，含通胀/通缩 CPI）和有限寿命约束下，通过职业选择、技能投资、股票投资、银行理财、借贷等决策，最大化最终净资产（通胀调整后的真实购买力）。
 
 ---
 
@@ -22,8 +22,10 @@ python run_wealthsandbox.py --agent llm --months 24 --cycle recession
 # 完整参数
 python run_wealthsandbox.py --agent llm --months 480 --seed 42 \
     --start-age 20 --end-age 60 --cycle random \
-    --save trajectories/run_001.json
+    --temperature 0 --save trajectories/run_001.json
 ```
+
+温度参数：`--temperature`（浮点，默认 `0`）控制 LLM 采样温度，`0` = 确定性贪心解码。
 
 环境变量（`.env` 或 shell）：
 
@@ -60,6 +62,8 @@ DEFAULT_MODEL=deepseek-v4-pro
 | `tenure_months` | 0 ~ ∞ | 当前职业在职月数，与 occ_skill 共同决定 tier 晋升 |
 | `current_tier` | 0 ~ N | 当前职业 ladder 索引（Junior → Mid → Senior → ...） |
 
+> **名义 vs 真实**：`cash` / `savings` / `stock_value` / `loan_balance` 均为**名义**金额，工资与生活费随 `price_level` 同涨。观测中展示的净资产 = 名义净资产 ÷ `price_level`，即**通胀调整后（真实）购买力**。详见[通胀/通缩系统](#通胀--通缩系统)。
+
 ### 二维技能系统
 
 ```
@@ -93,12 +97,13 @@ general_skill (可转移)         occupation_skills[occ_id] (职业绑定)
 ### 收入公式
 
 ```
-gross = base_monthly × (1 + skill_sensitivity × (general_skill − 3)) × tier_multiplier
+gross = base_monthly × (1 + skill_sensitivity × (general_skill − 3)) × tier_multiplier × price_level
 after_tax = gross × (1 − 0.15)
 ```
 
 - 参考技能等级为 3：gen_skill=3 时拿 base_monthly × tier_multiplier
 - 统一 15% 所得税
+- `price_level = CPI[t] / CPI₀`（起点 = 1.0）：工资随通胀**名义**上涨（cost-of-living adjustment）
 
 ### 行业亲密度矩阵（换职业时技能转移率）
 
@@ -124,15 +129,44 @@ MacroLayer 从 FRED 历史数据驱动经济周期。`raw_data/` 下有三个周
 | normal | `raw_data/normal/` | 1983-1989, 2010-2015 | 正常波动 |
 | recession | `raw_data/recession/` | 2008-2009, 2020 | 高失业率，NBER 衰退 |
 
-每个 CSV 包含列：`year, month, UNRATE, USREC, FEDFUNDS`
+周期 CSV（`raw_data/{boom,normal,recession}/*.csv`）包含列：`year, month, UNRATE, USREC, FEDFUNDS, SP500_TR`；连续长文件 `raw_data/1986_2025.csv` 额外包含 `CPI`。
 
 | 指标 | 来源 | 影响 |
 |---|---|---|
 | UNRATE（失业率） | FRED | 行业收入乘数、裁员概率 |
 | USREC（衰退标志） | FRED/NBER | 0=正常, 1=衰退，影响裁员和再就业 |
 | FEDFUNDS（联邦基金利率） | FRED | 储蓄利率、贷款利率 |
+| SP500_TR | Shiller | 股票月度总回报 |
+| CPI | Shiller | 通胀/通缩（驱动工资与生活费缩放） |
 
-**agent 不直接看到任何宏观数字。** 宏观指标只驱动底层机制，agent 通过具体状态变化感受经济——被裁员、收入下降、生活成本变化。Observation 中只展示定性的 `economy_status`（HEALTHY / SLUGGISH / WEAK / RECESSION）。
+**agent 不直接看到任何宏观数字。** 宏观指标只驱动底层机制，agent 通过具体状态变化感受经济——被裁员、收入下降、生活成本变化。Observation 中只展示定性的 `economy_status`（HEALTHY / SLUGGISH / WEAK / RECESSION），物价信号也只以「Prices are climbing fast…」等定性语句呈现。
+
+### 通胀 / 通缩系统
+
+CPI 数据来自 `stock_monthly.csv`（Shiller 数据集的 CPI 列），经 `scripts/extract_period.py` 并入连续长文件 `raw_data/1986_2025.csv`。`MacroLayer` 每月计算三个量：
+
+| 量 | 公式 | 含义 |
+|---|---|---|
+| `inflation` | `CPI[t] / CPI[t−1] − 1` | 月环比通胀率（负值 = 通缩） |
+| `price_level` | `CPI[t] / CPI₀` | 相对开局时刻的累计价格水平（起点 = 1.0） |
+| `cpi` | — | 当月 CPI 指数原始值 |
+
+**名义经济 + 真实目标**——各项目是否随 `price_level` 缩放：
+
+| 项目 | 是否缩放 | 说明 |
+|---|---|---|
+| 工资收入 | ✅ `salary × price_level` | `career.py` 中 cost-of-living adjustment |
+| 月生活费 | ✅ `expense × price_level` | `living.py` 中随物价同涨 |
+| 股票市值 | ❌ 保持名义 | `SP500_TR` 本身是名义总回报，已含通胀补偿 |
+| 储蓄 / 贷款 | ❌ 保持名义 | 按 FEDFUNDS 名义利率计息 |
+| 净资产（观测/打分） | ✅ `net_worth ÷ price_level` | 折算为真实购买力 |
+
+关键点：
+
+- 工资与生活费同涨、大致互相抵消——**名义工资变高 ≠ 变富**，真实购买力才是目标。
+- 净资产在观测与最终摘要中都以**通胀调整后（真实）美元**展示；破产判定仍用名义 `net_worth ≤ 0`（两者阈值一致，因 `price_level ≥ 0`）。
+- **仅在 continuous 模式生效**：需 `--macro-continuous-file 1986_2025.csv`。周期 CSV 目前不含 CPI 列，此时 `price_level` 恒为 1.0、`inflation` 恒为 0。
+- 参考值：1986-01 CPI = 109.6 → 2025-12 CPI = 324.05，全程 `price_level` 累计约 2.96×（年化约 2.8%）。
 
 ---
 
@@ -140,19 +174,22 @@ MacroLayer 从 FRED 历史数据驱动经济周期。`raw_data/` 下有三个周
 
 ### 数据来源
 
-股票数据来自 **Robert Shiller 的 S&P 500 历史数据集**（1871 年至今）。预处理脚本 `scripts/prepare_stock_data.py` 将原始 Excel 转为 `raw_data/stock_monthly.csv`，再由 `scripts/add_sp500_to_cycles.py` 把 `SP500_TR` 并入各宏观 cycle CSV（`raw_data/{boom,normal,recession}/*.csv`），确保股票收益与宏观指标同月对齐：
+股票数据来自 **Robert Shiller 的 S&P 500 历史数据集**（1871 年至今）。预处理脚本 `scripts/prepare_stock_data.py` 将原始 Excel 转为 `raw_data/stock_monthly.csv`（含 GS10 / SP500_TR / CPI），再由 `scripts/add_sp500_to_cycles.py` 把 `SP500_TR` 并入各宏观 cycle CSV、由 `scripts/extract_period.py` 把 `SP500_TR` + `CPI` 并入连续长文件 `1986_2025.csv`，确保股票收益与宏观指标同月对齐：
 
 | 列 | 含义 |
 |---|---|
 | `year`, `month` | 年月 |
 | `GS10` | 10 年期美国国债名义收益率 |
 | `SP500_TR` | S&P 500 月度**总回报率**（含股息） |
+| `CPI` | 消费者价格指数（驱动[通胀/通缩系统](#通胀--通缩系统)） |
 
 ```
 SP500_TR[t] = (Price[t] + Dividend[t] / 12) / Price[t−1] − 1
 ```
 
 这是一个**名义总回报率**（含价格变动 + 股息再投资），无需 agent 计算股息，直接应用于持仓市值。
+
+> 股票市值**不随 `price_level` 折算**——名义回报本身已含通胀补偿，故股票天然跑赢现金。真正的通胀调整发生在最终打分的净资产处（`net_worth ÷ price_level`）。若把股票也除以 `price_level`，等于对通胀**双重扣减**，会低估股票保值能力。
 
 ### 核心规则
 
@@ -173,7 +210,7 @@ SP500_TR[t] = (Price[t] + Dividend[t] / 12) / Price[t−1] − 1
 
 ---
 
-## 十种可用工具
+## 十二种可用工具
 
 agent 不调工具 = 自动工作赚钱。工具用于**主动改变现状**。每月可提交**多个工具**（原子 bundle，按序执行）。
 
@@ -185,6 +222,13 @@ agent 不调工具 = 自动工作赚钱。工具用于**主动改变现状**。�
 | `upskill` | general_skill +1（上限 10） | $5,000 + 40% energy，6 个月（继续工作） |
 | `intensive_work` | 当前职业 occ_skill +1（上限 10） | 40% energy，3 个月（继续工作），无现金成本 |
 | `quit_job` | 立即辞职，收入归零 | 免费 |
+
+### 健康/恢复类
+
+| 工具 | 效果 | 成本 / 限制 |
+|---|---|---|
+| `rest` | health +0.02、energy +30%（均封顶 1.0） | 当月收入 ×0.8；health 与 energy 都满时不可用 |
+| `medical_care` | health +0.05（立即，封顶 1.0） | $3,000 现金；每年最多 2 次 |
 
 ### 银行类
 
@@ -231,6 +275,8 @@ def guard_xxx(state: AgentState, career: CareerSystem) -> GuardResult:
 | `REPAY` | loan > 0 → cash > 0 → amount > 0 → amount ≤ cash → amount ≤ loan |
 | `BUY_STOCK` | cash ≥ buffer → amount > 0 → amount ≤ cash − buffer |
 | `SELL_STOCK` | stock_value > 0 → amount > 0 → amount ≤ stock_value |
+| `REST` | health < 1.0 或 energy < 1.0（都满时拒绝，避免白损失收入） |
+| `MEDICAL_CARE` | 本年使用 < 2 次 → cash ≥ $3,000 |
 
 ### 动态工具过滤
 
@@ -262,15 +308,15 @@ Phase 1 — VALIDATE + EXECUTE
 
 Phase 2 — TICK（每月仅执行一次）
   ├─ AssetSystem.tick:       T+1 卖出结算到账 + 股票市值按 S&P 500 总回报变动
-  ├─ CareerSystem.tick:      自动发工资、layoff 判定、timer 推进
+  ├─ CareerSystem.tick:      自动发工资（× price_level）、layoff 判定、timer 推进
   ├─ EnergySystem.tick:      培训能量消耗 / 休息能量恢复
   └─ HealthSystem.tick:      年龄加速健康衰减
 
 Phase 3 — FINALISE
-  ├─ LivingExpenseSystem: 扣除月生活费（现金不足自动从储蓄扣，仍不足强制折价卖出股票）
+  ├─ LivingExpenseSystem: 扣除月生活费（× price_level；现金不足自动从储蓄扣，仍不足强制折价卖出股票）
   ├─ AssetSystem.finalize: 将当月卖出转入 pending_settlement（T+1 延迟）
   ├─ BankSystem.finalize:  储蓄利息、贷款利息、贷款自动还款
-  ├─ macro.step():         推进月份，加载下月宏观数据（含 S&P 500 和 GS10）
+  ├─ macro.step():         推进月份，加载下月宏观数据（含 SP500_TR、CPI，计算 inflation / price_level）
   ├─ AgingSystem:          年龄递增
   ├─ check_dead():         破产/死亡/超龄判定（净资 = 现金 + 储蓄 + 股票 + 待结算 − 贷款）
   └─ cash = max(0, cash)
@@ -281,6 +327,26 @@ Phase 3 — FINALISE
 - **拒绝不推进月份** — 被拒当场反馈，agent 可立即重试
 - **Tick 在 Execute 之后** — agent 的下一个 observation 反映最新 tick 结果（包括刚发生的裁员）
 - **原子 bundle** — 多工具在同月内按序执行，产生干净的 (s, CoT, [actions], s') 训练数据
+
+### reward 信号拆分
+
+每个月的标量 `reward` = **本月净资产的净变动**，它被拆成若干分项（净值流动）记录在 `state.monthly_flow` 中，跨月累计保存在 `state.cumulative_flow`。二者随每步轨迹一起落盘，便于归因最终财富来自哪里。
+
+| 分项 key | 方向 | 来源 |
+|---|---|---|
+| `employment_income` | + | CareerSystem.tick 工资（已 × price_level、× 税率、× tier/技能） |
+| `living_expense` | − | LivingExpenseSystem.finalize 月生活费（× price_level） |
+| `career_cost` | − | upskill（$5000）/ 转职成本（base + entry） |
+| `medical_cost` | − | medical_care（$3000） |
+| `stock_pnl` | ± | AssetSystem.tick 股票逐月 mark-to-market（市值 × SP500_TR） |
+| `forced_sale_loss` | − | 现金不足时的强制折价卖出损失 |
+| `savings_interest` | + | BankSystem.finalize 储蓄利息（FEDFUNDS/12） |
+| `loan_interest` | − | BankSystem.finalize 贷款利息（(FEDFUNDS+2%)/12） |
+
+约定：
+- **只记净值变动**：存/取款、借/还款、买/卖股票都是余额内部转移（现金 ⇄ 储蓄/贷款/股票），净值不变，**不计入** flow。
+- `reward = Σ monthly_flow`，即本月净资产变化量（与 `cash + savings + stock_value + pending_settlement − loan_balance` 的环比差一致）。
+- 轨迹里每个 step 的 `state_after` 会额外带 `reward`、`flow`（本月分项）、`cumulative_flow`（跨月累计）三个字段。
 
 ---
 
@@ -358,11 +424,11 @@ messages = [
 | 系统 | 职责 |
 |---|---|
 | **AssetSystem** | 股票买入/卖出、月度市值变动（S&P 500 总回报）、T+1 结算、强制折价清算、破产判定 |
-| **CareerSystem** | 职业注册表、收入计算、转职/培训/upskill/intensive_work/辞职、tier 晋升、裁员判定 |
+| **CareerSystem** | 职业注册表、收入计算（随通胀缩放）、转职/培训/upskill/intensive_work/辞职、tier 晋升、裁员判定 |
 | **EnergySystem** | 能量消耗（upskill/intensive_work）、培训月衰减、休息恢复 |
-| **LivingExpenseSystem** | 月生活费扣除，不足时自动从储蓄提取，仍不足触发股票强制清算 |
+| **LivingExpenseSystem** | 月生活费扣除（随通胀缩放），不足时自动从储蓄提取，仍不足触发股票强制清算 |
 | **BankSystem** | 存取款、借贷、还款、月利息结算、自动还款 |
-| **HealthSystem** | 年龄加速健康衰减（20-29: 0.03%/月, 30-39: 0.1%, 40-49: 0.3%, 50+: 0.6%） |
+| **HealthSystem** | 年龄加速健康衰减（20-29: 0.03%/月, 30-39: 0.2%, 40-49: 0.6%, 50+: 1.2%）；`rest` / `medical_care` 回补健康 |
 | **AgingSystem** | 年龄递增 + 超龄终止判定 |
 
 ---
@@ -383,8 +449,17 @@ EnvConfig(
     switch_occupation_base_cost=2000.0,
 
     # 健康（分年龄段）
-    health_decline_20_29=0.0003, health_decline_30_39=0.001,
-    health_decline_40_49=0.003,  health_decline_50_plus=0.006,
+    health_decline_20_29=0.0003, health_decline_30_39=0.002,
+    health_decline_40_49=0.006,  health_decline_50_plus=0.012,
+
+    # 健康恢复（rest / medical_care）
+    health_max=1.0,
+    rest_health_gain=0.02,         # rest 回补健康
+    rest_energy_gain=0.3,          # rest 回补能量
+    rest_income_penalty=0.20,      # rest 当月收入损失比例
+    medical_care_cost=3000.0,      # medical_care 现金成本
+    medical_care_health_gain=0.05, # medical_care 回补健康
+    medical_care_max_per_year=2,   # medical_care 每年上限
 
     # 能量
     energy_cost_per_upskill=0.4,
@@ -404,7 +479,8 @@ EnvConfig(
     macro_data_dir="raw_data",
     macro_cycle="",      # "" = 随机, "boom", "normal", "recession"
     macro_cycle_file="", # 指定具体 CSV, e.g. "2008_2009.csv"
-    layoff_base_rate=0.05,
+    macro_continuous_file="",  # 连续长文件, e.g. "1986_2025.csv"（通胀/通缩仅在此模式生效）
+    layoff_base_rate=0.02,
 
     # Agent 初始条件
     profile=AgentProfile(age=20, initial_cash=10000.0, ...),
@@ -444,7 +520,10 @@ EnvConfig(
         "upskill_months_remaining": 5, "intensive_work_months_remaining": 0,
         "training_months_remaining": 0,
         "events": ["Switched to Manufacturing Worker...", "Earned $3,036...", "Paid $2,000..."],
-        "macro": {"unrate": 0.05, "usrecm": 1, "fedfunds": 3.94, "cycle_label": "recession", "economy_status": "The economy is in RECESSION..."}
+        "macro": {"unrate": 0.05, "usrecm": 1, "fedfunds": 3.94, "cycle_label": "recession", "economy_status": "The economy is in RECESSION..."},
+        "reward": 1036.20,
+        "flow": {"employment_income": 3036.20, "living_expense": -2000.00},
+        "cumulative_flow": {"employment_income": 3036.20, "living_expense": -2000.00}
       }
     }
   ],
@@ -454,6 +533,7 @@ EnvConfig(
     "final_occupation_id": "software_engineer",
     "final_general_skill": 8, "final_occ_skill": 7,
     "final_health": 0.85, "final_job_status": "employed",
+    "final_net_worth": 300000.0, "final_real_net_worth": 101500.0,
     "termination_reason": "age_limit", "age": 60
   }
 }
@@ -469,21 +549,23 @@ sandbox/
 ├── README.md
 ├── raw_data/                         # FRED 历史宏观数据
 │   ├── UNRATE.csv, USREC.csv, FEDFUNDS.csv
-│   ├── stock_monthly.csv               # Shiller S&P 500 月度总回报 + GS10
+│   ├── stock_monthly.csv               # Shiller S&P 500 月度总回报 + GS10 + CPI
+│   ├── 1986_2025.csv                   # 连续长文件（UNRATE/USREC/FEDFUNDS/SP500_TR/CPI，通胀系统数据源）
 │   ├── boom/                         # 经济扩张周期
 │   ├── normal/                       # 正常周期
 │   └── recession/                    # 衰退周期
 ├── trajectories/                     # 轨迹输出
 ├── scripts/                            # 数据预处理
 │   ├── prepare_stock_data.py           #   Shiller 数据清洗 → stock_monthly.csv
-│   └── add_sp500_to_cycles.py          #   把 SP500_TR 并入各 cycle CSV
+│   ├── add_sp500_to_cycles.py          #   把 SP500_TR 并入各 cycle CSV
+│   └── extract_period.py               #   把 SP500_TR + CPI 并入连续长文件 1986_2025.csv
 │
 └── wealthsandbox/
     ├── __init__.py                   # 导出 WealthSandBoxEnv, EnvConfig
     ├── config.py                     # 常量 + EnvConfig dataclass
     ├── types.py                      # Action, Observation, AgentState, CareerMove, JobStatus, Tier
     ├── profile.py                    # AgentProfile（agent 初始条件）
-    ├── macro_layer.py                # 月份计数 + 宏观/股票数据驱动（UNRATE/USREC/FEDFUNDS/SP500_TR）
+    ├── macro_layer.py                # 月份计数 + 宏观/股票数据驱动（UNRATE/USREC/FEDFUNDS/SP500_TR/CPI）
     ├── micro_layer.py                # AgentState 工厂
     ├── validator.py                  # ActionValidator + 全部 guard 函数
     ├── env.py                        # 主环境：三阶段 step/reset/observation

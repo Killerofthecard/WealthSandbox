@@ -335,6 +335,9 @@ def print_final_summary(env, total_reward: float, months_played: int) -> None:
     print(f"  {'Occ Skill':24} {occ_skill}")
     print(f"  {'Health':24} {s.health:.3f}")
     print(f"  {'Job Status':24} {s.job_status.value}")
+    net_worth = s.cash + s.savings + s.stock_value + s.pending_settlement - s.loan_balance
+    price_level = env.macro.price_level or 1.0
+    print(f"  {'Net worth (real)':24} {money(net_worth / price_level)}")
     print(f"{C.GREEN}{C.BOLD}{'═' * 80}{C.RESET}")
 
 
@@ -388,6 +391,7 @@ class TrajectoryWriter:
                 "intensive_work_months": env.config.intensive_work_months,
                 "occ_skill_passive_months": env.config.occ_skill_passive_months,
                 "macro_cycle": env.config.macro_cycle or "random",
+                "macro_continuous_file": env.config.macro_continuous_file or "",
             },
             "profile": {
                 "age": env.config.profile.age,
@@ -568,10 +572,17 @@ def build_agent(args, config=None) -> object:
             persona=persona,
             forced_sale_discount=config.forced_sale_discount if config else 0.10,
             min_cash_buffer=config.min_cash_buffer if config else 2_000.0,
+            rest_health_gain=config.rest_health_gain if config else 0.02,
+            rest_energy_gain=config.rest_energy_gain if config else 0.3,
+            rest_income_penalty=config.rest_income_penalty if config else 0.20,
+            medical_care_cost=config.medical_care_cost if config else 3_000.0,
+            medical_care_health_gain=config.medical_care_health_gain if config else 0.05,
+            medical_care_max_per_year=config.medical_care_max_per_year if config else 2,
+            health_max=config.health_max if config else 1.0,
         )
         return LLMAgent(
             model=args.model or os.getenv("DEFAULT_MODEL", "gpt-4.1-mini"),
-            temperature=0.7,
+            temperature=args.temperature,
             max_tokens=None,
             system_prompt=prompt,
             living_expense=config.monthly_living_expense if config else 2_000.0,
@@ -584,6 +595,13 @@ def build_agent(args, config=None) -> object:
             persona=persona,
             forced_sale_discount=config.forced_sale_discount if config else 0.10,
             min_cash_buffer=config.min_cash_buffer if config else 2_000.0,
+            rest_health_gain=config.rest_health_gain if config else 0.02,
+            rest_energy_gain=config.rest_energy_gain if config else 0.3,
+            rest_income_penalty=config.rest_income_penalty if config else 0.20,
+            medical_care_cost=config.medical_care_cost if config else 3_000.0,
+            medical_care_health_gain=config.medical_care_health_gain if config else 0.05,
+            medical_care_max_per_year=config.medical_care_max_per_year if config else 2,
+            health_max=config.health_max if config else 1.0,
         )
     elif args.agent == "random":
         return RandomAgent(seed=args.seed)
@@ -633,6 +651,12 @@ def main() -> int:
         help="LLM model name (default: $DEFAULT_MODEL or gpt-4.1-mini).",
     )
     parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="LLM sampling temperature (default: 0.0).",
+    )
+    parser.add_argument(
         "--macro-cycle",
         type=str,
         default="",
@@ -644,6 +668,12 @@ def main() -> int:
         type=str,
         default="",
         help="Specific cycle CSV, e.g. '2008_2009.csv'. Overrides --macro-cycle.",
+    )
+    parser.add_argument(
+        "--macro-continuous-file",
+        type=str,
+        default="",
+        help="Single long CSV at raw_data/ root (e.g. '1986_2025.csv') — reads the whole horizon and freezes on exhaustion.",
     )
     parser.add_argument(
         "--profile",
@@ -667,6 +697,7 @@ def main() -> int:
         profile=AgentProfile(age=args.start_age),
         macro_cycle=args.macro_cycle,
         macro_cycle_file=args.macro_file,
+        macro_continuous_file=args.macro_continuous_file,
     )
 
     # Setup
@@ -735,6 +766,7 @@ def main() -> int:
         "seed": args.seed,
         "macro_cycle": args.macro_cycle or "random",
         "macro_cycle_file": getattr(env.macro, "current_cycle_file", ""),
+        "macro_continuous_file": args.macro_continuous_file or "",
         "profile": getattr(args, "profile", None),
     }
     writer = TrajectoryWriter(jsonl_path, run_meta=run_meta)
@@ -792,6 +824,8 @@ def main() -> int:
 
     # Build final summary
     s = env.micro.state
+    net_worth = s.cash + s.savings + s.stock_value + s.pending_settlement - s.loan_balance
+    price_level = env.macro.price_level or 1.0
     final_summary = {
         "months_played": months_completed,
         "total_reward": round(total_reward, 2),
@@ -802,6 +836,8 @@ def main() -> int:
         "final_health": round(s.health, 3),
         "final_energy": round(s.energy, 3),
         "final_job_status": s.job_status.value,
+        "final_net_worth": round(net_worth, 2),
+        "final_real_net_worth": round(net_worth / price_level, 2),
         "termination_reason": termination_reason or "max_steps_reached",
         "age": s.age,
     }

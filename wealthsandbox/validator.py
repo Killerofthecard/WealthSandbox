@@ -350,6 +350,16 @@ def guard_sell_stock_amount(
     return GuardResult.ok()
 
 
+def guard_rest(state: AgentState, career) -> GuardResult:
+    """rest is always legal unless there is literally nothing to recover."""
+    if state.health >= 1.0 and state.energy >= 1.0:
+        return GuardResult.reject(
+            "rest_rejected_fully_rested",
+            "Already fully rested and energized — resting would only cost income.",
+        )
+    return GuardResult.ok()
+
+
 # ---------------------------------------------------------------------------
 # ActionValidator
 # ---------------------------------------------------------------------------
@@ -357,7 +367,13 @@ def guard_sell_stock_amount(
 class ActionValidator:
     """Central registry of all action guard functions."""
 
-    def __init__(self, career, energy_threshold: float = 0.4):
+    def __init__(
+        self,
+        career,
+        energy_threshold: float = 0.4,
+        medical_care_cost: float = 3_000.0,
+        medical_care_max_per_year: int = 2,
+    ):
         self._career = career
         self._guards: Dict[CareerMove, List[Callable]] = {}
 
@@ -371,6 +387,7 @@ class ActionValidator:
         self.register(CareerMove.REPAY, guard_repay)
         self.register(CareerMove.BUY_STOCK, guard_buy_stock)
         self.register(CareerMove.SELL_STOCK, guard_sell_stock)
+        self.register(CareerMove.REST, guard_rest)
 
         # Energy gate for upskill and intensive_work
         threshold = energy_threshold
@@ -386,6 +403,26 @@ class ActionValidator:
 
         self.register(CareerMove.UPSKILL, guard_energy)
         self.register(CareerMove.INTENSIVE_WORK, guard_energy)
+
+        # Medical care: cash cost + per-year usage cap (closure over config).
+        mc_cost = medical_care_cost
+        mc_max = medical_care_max_per_year
+
+        def guard_medical_care(state, career):
+            if state.medical_care_uses_this_year >= mc_max:
+                return GuardResult.reject(
+                    "medical_care_rejected_limit",
+                    f"Already used medical care {mc_max} times this year.",
+                )
+            if state.cash < mc_cost:
+                return GuardResult.reject(
+                    "medical_care_rejected_insufficient_cash",
+                    f"Medical care costs ${mc_cost:,.0f} — you only have "
+                    f"${state.cash:,.0f} cash.",
+                )
+            return GuardResult.ok()
+
+        self.register(CareerMove.MEDICAL_CARE, guard_medical_care)
 
     def register(self, action: CareerMove, guard_fn: Callable) -> None:
         self._guards.setdefault(action, []).append(guard_fn)

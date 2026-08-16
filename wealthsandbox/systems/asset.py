@@ -63,6 +63,7 @@ class AssetSystem(BaseSystem):
             old_value = pre_existing
             pre_existing *= (1.0 + sp500_tr)
             change = pre_existing - old_value
+            state.record_flow("stock_pnl", change)
             pct = sp500_tr * 100.0
             direction = "gained" if change >= 0 else "lost"
             state.last_month_events.append(
@@ -183,6 +184,8 @@ class AssetSystem(BaseSystem):
 
         state.stock_value -= stock_consumed
         state.cash += actual_raised
+        # The discount is a real loss: net worth drops by (stock_consumed - actual_raised).
+        state.record_flow("forced_sale_loss", actual_raised - stock_consumed)
 
         state.last_month_events.append(
             f"EMERGENCY: Forced to sell stocks at a {discount:.0%} loss, "

@@ -35,7 +35,11 @@ class LivingExpenseSystem(BaseSystem):
         return False
 
     def finalize(self, state: AgentState, macro: Dict[str, Any]) -> None:
-        state.cash -= self.monthly_living_expense
+        # Nominal living expense grows with the price level (CPI-driven).
+        price_level = macro.get("price_level", 1.0)
+        expense = self.monthly_living_expense * price_level
+        state.cash -= expense
+        state.record_flow("living_expense", -expense)
 
         # Auto-cover shortfall from savings first
         if state.cash < 0.0 and state.savings > 0:
@@ -54,7 +58,7 @@ class LivingExpenseSystem(BaseSystem):
 
         if state.cash >= 0.0:
             state.last_month_events.append(
-                f"Paid ${self.monthly_living_expense:,.0f} living expenses."
+                f"Paid ${expense:,.0f} living expenses."
             )
         else:
             state.last_month_events.append(

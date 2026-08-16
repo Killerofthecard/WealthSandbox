@@ -48,6 +48,13 @@ def _build_system_prompt(
     persona: str = "",
     forced_sale_discount: float = 0.10,
     min_cash_buffer: float = 2_000.0,
+    rest_health_gain: float = 0.02,
+    rest_energy_gain: float = 0.3,
+    rest_income_penalty: float = 0.20,
+    medical_care_cost: float = 3_000.0,
+    medical_care_health_gain: float = 0.05,
+    medical_care_max_per_year: int = 2,
+    health_max: float = 1.0,
 ) -> str:
     """Build the system prompt from actual configured costs and profile (no magic numbers).
 
@@ -117,9 +124,14 @@ def _build_system_prompt(
 {persona_block}\
 # Game Rules
 
-You are an agent in a career & life simulation.  Your goal is to maximise
-your **net worth** (cash + savings + stocks + pending settlement − loan) by
-age {end_age}.
+You are an agent in a career & life simulation.  Your **primary goal is to
+survive to age {end_age}** — do not go bankrupt (net worth ≤ $0) and do not
+die (health ≤ 0).  Surviving long enough, maximise your **net worth**
+(cash + savings + stocks + pending settlement − loan, measured in
+inflation-adjusted dollars) at age {end_age}.
+These two goals can conflict: a gruelling career maximises income but burns
+health; resting and medical care preserve survival but cost money.  Balance
+them.
 
 You start at age {start_age} — you have {total_months} months.  Each turn is
 **one month** (12 turns = 1 year).
@@ -159,6 +171,18 @@ described has a matching tool call.  If one is missing, add it.
 Each turn you see an Economy Status: HEALTHY, SLUGGISH, WEAK, or RECESSION.
 This reflects the labour market and affects your income, layoff risk, and
 loan interest rates.
+
+## Inflation
+Prices drift over time (driven by real historical CPI).  Both your salary
+and your monthly living expense scale up with the price level, roughly
+cancelling out — so a higher nominal salary later in life does **not** mean
+you are richer; your purchasing power is what matters.  Your **net worth is
+always reported in inflation-adjusted (real) dollars**: a flat real net worth
+means your purchasing power is unchanged, and a rising real net worth means
+you are genuinely getting wealthier.  Periods of falling prices (deflation)
+occasionally occur and shrink both your salary and your living expense.
+Because cash and savings earn little interest, beating inflation usually
+requires growing income (promotion, upskilling) or investing in stocks.
 
 ## Stock Market
 You can invest in a stock index fund that tracks the broad market.  Stock
@@ -210,18 +234,25 @@ values fluctuate monthly — they can go up OR down.  Key rules:
   for this month's expenses.
 
 **Net Worth**
-  Cash + Savings + Stocks + Pending Settlement − Loan.  If this drops
-  to ≤ $0, you go bankrupt and the game ends.
+  Cash + Savings + Stocks + Pending Settlement − Loan, divided by the current
+  price level — i.e. reported in inflation-adjusted (real) dollars.  If this
+  drops to ≤ $0, you go bankrupt and the game ends.
 
 **Loan** ($0 at start)
   Money you owe the bank.  Interest = (federal funds rate + 2%) / 12 per
   month.  2% of the balance is auto-repaid each month.  Borrowing limit:
   12× monthly income if employed, otherwise $8,000.
 
-**Health** ({initial_health:.1f} at start, range 0.0–1.0)
-  Declines every month, faster with age.  Purely passive — you cannot
-  restore it.  If health drops below an occupation's minimum threshold
-  while employed, you are **forced to resign immediately**.
+**Health** ({initial_health:.1f} at start, range 0.0–{health_max:.1f})
+  Declines every month, faster with age — but you CAN restore it:
+  - `rest`: +{rest_health_gain:.2f} health and +{rest_energy_gain:.0%}
+    energy, but you earn only {1 - rest_income_penalty:.0%} of your normal
+    income that month.
+  - `medical_care`: +{medical_care_health_gain:.2f} health immediately, for
+    ${medical_care_cost:,.0f} cash (max {medical_care_max_per_year}× per year).
+  If health drops below an occupation's minimum threshold while employed,
+  you are **forced to resign immediately**.  If health reaches 0, you die
+  and the game ends.
 
 **Energy** ({initial_energy:.1f} at start, range 0.0–1.0)
   Spent on upskill ({energy_cost_per_upskill:.0%}) and intensive_work
@@ -255,6 +286,8 @@ The month ends after they execute — there is no second chance.
 | `switch_occupation(id)` | Change career.  General skill carries over (same industry ~80%, unrelated ~20%).  Occupation skill resets. | gen_skill ≥ occupation minimum, health ≥ occupation minimum.  **manufacturing_worker is always free** (no cash, no training).  All other jobs: cash ≥ ${switch_base_cost:,.0f} + entry_cost + ${living_expense:,.0f} buffer.  Training 0–6 months. |
 | `upskill` | General skill +{upskill_skill_boost}.  Unlocks new occupations, boosts salary. | ${upskill_cost:,.0f} cash + {energy_cost_per_upskill:.0%} energy.  {upskill_months} months.  Need ≥${upskill_cost + living_expense:,.0f} cash + ≥{energy_threshold:.0%} energy. |
 | `intensive_work` | Occupation skill +1 in current job.  Accelerates tier promotion. | {energy_cost_per_intensive_work:.0%} energy (NO cash).  {intensive_work_months} months.  Must be employed, ≥{energy_threshold:.0%} energy. |
+| `rest` | Recover {rest_health_gain:.2f} health and {rest_energy_gain:.0%} energy this month. | Earn only {1 - rest_income_penalty:.0%} of normal income this month. |
+| `medical_care` | Recover {medical_care_health_gain:.2f} health immediately. | ${medical_care_cost:,.0f} cash.  Max {medical_care_max_per_year}×/year. |
 | `quit_job` | Resign immediately.  Income → $0.  Living expenses continue. | Must be employed. |
 | `deposit(amount)` | Cash → savings.  Earns monthly interest. | Keep ≥${living_expense:,.0f} cash.  amount ≤ cash − ${living_expense:,.0f}. |
 | `withdraw(amount)` | Savings → cash.  Instant. | amount ≤ savings balance. |
@@ -304,6 +337,13 @@ class LLMAgent:
         persona: str = "",
         forced_sale_discount: float = 0.10,
         min_cash_buffer: float = 2_000.0,
+        rest_health_gain: float = 0.02,
+        rest_energy_gain: float = 0.3,
+        rest_income_penalty: float = 0.20,
+        medical_care_cost: float = 3_000.0,
+        medical_care_health_gain: float = 0.05,
+        medical_care_max_per_year: int = 2,
+        health_max: float = 1.0,
     ):
         self.model = model or os.getenv("DEFAULT_MODEL", "gpt-4.1-mini")
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
@@ -328,6 +368,13 @@ class LLMAgent:
             persona=persona,
             forced_sale_discount=forced_sale_discount,
             min_cash_buffer=min_cash_buffer,
+            rest_health_gain=rest_health_gain,
+            rest_energy_gain=rest_energy_gain,
+            rest_income_penalty=rest_income_penalty,
+            medical_care_cost=medical_care_cost,
+            medical_care_health_gain=medical_care_health_gain,
+            medical_care_max_per_year=medical_care_max_per_year,
+            health_max=health_max,
         )
 
         if not self.api_key:
@@ -355,6 +402,12 @@ class LLMAgent:
                 occupations=occupations,
                 min_cash_buffer=min_cash_buffer,
                 forced_sale_discount=forced_sale_discount,
+                rest_health_gain=rest_health_gain,
+                rest_energy_gain=rest_energy_gain,
+                rest_income_penalty=rest_income_penalty,
+                medical_care_cost=medical_care_cost,
+                medical_care_health_gain=medical_care_health_gain,
+                medical_care_max_per_year=medical_care_max_per_year,
             )
 
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
@@ -492,12 +545,14 @@ class LLMAgent:
             f"Age: {ind.get('age', '?')}",
             f"Health: {ind.get('health', 0):.3f}",
             f"Energy: {ind.get('energy', 1.0):.1%}",
+            f"Medical care used this year: {ind.get('medical_care_uses_this_year', 0)}",
             f"Occupation: {ind.get('occupation_id', 'none') or 'none'}",
             f"Job Status: {ind.get('job_status', '?')}",
             f"General Skill: {ind.get('general_skill', 1)}",
             f"Occ Skill: {ind.get('occ_skill', 0)}",
             f"Tenure: {ind.get('tenure_months', 0)} months",
             f"Monthly After-Tax Income: ${ind.get('monthly_after_tax_income', 0):,.2f}",
+            f"Living expense: ${macro.get('living_expense', 0):,.0f}/mo",
             f"Cash: ${ind.get('cash', 0):,.2f}",
             f"Savings: ${ind.get('savings', 0):,.2f}",
             f"Loan: ${ind.get('loan_balance', 0):,.2f}",
@@ -521,7 +576,9 @@ class LLMAgent:
             )
 
         net_worth = ind.get("net_worth", 0)
-        lines.append(f"Net worth: ${net_worth:,.2f}")
+        price_level = macro.get("price_level", 1.0) or 1.0
+        real_net_worth = net_worth / price_level
+        lines.append(f"Net worth: ${real_net_worth:,.2f} (inflation-adjusted)")
 
         upskill = ind.get("upskill_months_remaining", 0)
         if upskill > 0:
@@ -562,10 +619,22 @@ class LLMAgent:
         # Economy status
         econ = macro.get("economy_status", "")
         if econ:
+            inflation = macro.get("inflation", 0.0)
+            if inflation > 0.006:
+                price_note = "Prices are climbing fast — your living expense and salary are growing quickly."
+            elif inflation > 0.001:
+                price_note = "Prices are edging up."
+            elif inflation < -0.006:
+                price_note = "Prices are dropping sharply (deflation) — your living expense and salary are shrinking."
+            elif inflation < -0.001:
+                price_note = "Prices are drifting down (mild deflation)."
+            else:
+                price_note = "Prices are roughly flat."
             lines.extend([
                 "",
                 f"# Economy Status",
                 f"  {econ}",
+                f"  {price_note}",
             ])
 
         # Available occupations (only provided when unemployed)

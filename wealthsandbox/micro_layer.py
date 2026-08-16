@@ -68,5 +68,6 @@ class MicroLayer:
             "intensive_work_months_remaining": s.intensive_work_months_remaining,
             "training_months_remaining": s.training_months_remaining,
             "training_target_occupation": s.training_target_occupation,
+            "medical_care_uses_this_year": s.medical_care_uses_this_year,
             "last_month_events": list(s.last_month_events),
         }

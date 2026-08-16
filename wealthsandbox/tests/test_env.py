@@ -301,6 +301,120 @@ class TestWealthSandBoxEnv(unittest.TestCase):
         self.assertLess(env.micro.state.health, health_before)  # health declined once
         self.assertEqual(len(env.history), 1)  # archived once
 
+    # --- rest / medical_care flow ---
+
+    def test_rest_recovers_health_energy_and_penalizes_income(self):
+        env = WealthSandBoxEnv(EnvConfig(seed=1))
+        env.reset(seed=1)
+        env.step(action=Action(
+            career_move=CareerMove.SWITCH_OCCUPATION,
+            target_occupation_id="manufacturing_worker",
+        ))
+        # Baseline normal income for one auto-work month
+        env.step(action=Action(career_move=CareerMove.NONE))
+        normal_income = env.micro.state.monthly_after_tax_income
+
+        # Lower health/energy so rest is legal (health still above job's 0.6 min)
+        env.micro.state.health = 0.7
+        env.micro.state.energy = 0.5
+        obs, reward, done, info = env.step(action=Action(career_move=CareerMove.REST))
+        self.assertFalse(info.get("action_rejected"))
+        # health recovered (+0.04, net of tiny age decline); energy recovered
+        self.assertGreater(env.micro.state.health, 0.7)
+        self.assertGreater(env.micro.state.energy, 0.8)
+        # rest month earns 20% less
+        self.assertLess(env.micro.state.monthly_after_tax_income, normal_income)
+        # flag cleared after the month
+        self.assertFalse(env.micro.state.resting_this_month)
+
+    def test_medical_care_pays_and_recovers_health(self):
+        env = WealthSandBoxEnv(EnvConfig(seed=1))
+        env.reset(seed=1)
+        env.step(action=Action(
+            career_move=CareerMove.SWITCH_OCCUPATION,
+            target_occupation_id="manufacturing_worker",
+        ))
+        env.micro.state.health = 0.7
+        cash_before = env.micro.state.cash
+        obs, reward, done, info = env.step(action=Action(career_move=CareerMove.MEDICAL_CARE))
+        self.assertFalse(info.get("action_rejected"))
+        self.assertGreater(env.micro.state.health, 0.7)      # recovered +0.15
+        self.assertLess(env.micro.state.cash, cash_before)    # paid $3,000
+        self.assertEqual(env.micro.state.medical_care_uses_this_year, 1)
+
+    def test_medical_care_third_use_rejected(self):
+        env = WealthSandBoxEnv(EnvConfig(seed=1))
+        env.reset(seed=1)
+        env.step(action=Action(
+            career_move=CareerMove.SWITCH_OCCUPATION,
+            target_occupation_id="manufacturing_worker",
+        ))
+        env.micro.state.medical_care_uses_this_year = 2
+        env.micro.state.cash = 50_000
+        obs, reward, done, info = env.step(action=Action(career_move=CareerMove.MEDICAL_CARE))
+        self.assertTrue(info.get("action_rejected"))
+        self.assertIn("times", info.get("rejection_message", "").lower())
+
+    def test_medical_care_uses_reset_each_year(self):
+        from wealthsandbox.systems.aging import AgingSystem
+        from wealthsandbox.types import AgentState
+        aging = AgingSystem(end_age=60)
+        state = AgentState(medical_care_uses_this_year=2)
+        aging.finalize(state, {"total_months": 12})
+        self.assertEqual(state.age, 21)
+        self.assertEqual(state.medical_care_uses_this_year, 0)
+
+    # --- Reward decomposition (per-step flow ledger) ---
+
+    def test_step_records_component_flows(self):
+        """Each completed month records per-component flows and a summed reward."""
+        env = WealthSandBoxEnv(EnvConfig(seed=1))
+        env.reset(seed=1)
+        obs, reward, done, info = env.step(action=Action(
+            career_move=CareerMove.SWITCH_OCCUPATION,
+            target_occupation_id="manufacturing_worker",
+        ))
+        self.assertFalse(info.get("action_rejected"))
+        step = env.history[-1]
+
+        flow = step["flow"]
+        self.assertGreater(flow["employment_income"], 0)
+        self.assertLess(flow["living_expense"], 0)
+        # Reward is the sum of the month's component flows.
+        self.assertAlmostEqual(reward, sum(flow.values()), places=2)
+        self.assertAlmostEqual(step["reward"], reward, places=2)
+
+    def test_cumulative_flow_accumulates_across_months(self):
+        env = WealthSandBoxEnv(EnvConfig(seed=1))
+        env.reset(seed=1)
+        env.step(action=Action(
+            career_move=CareerMove.SWITCH_OCCUPATION,
+            target_occupation_id="manufacturing_worker",
+        ))
+        env.step(action=Action(career_move=CareerMove.NONE))
+
+        cum = env.history[-1]["cumulative_flow"]
+        # Two months of employment income and living expense.
+        self.assertGreater(cum["employment_income"], 0)
+        self.assertLess(cum["living_expense"], 0)
+        # Cumulative income must exceed a single month's income.
+        latest_income = env.history[-1]["flow"].get("employment_income", 0)
+        self.assertGreater(cum["employment_income"], latest_income)
+
+    def test_medical_cost_recorded_as_negative_flow(self):
+        env = WealthSandBoxEnv(EnvConfig(seed=1))
+        env.reset(seed=1)
+        env.step(action=Action(
+            career_move=CareerMove.SWITCH_OCCUPATION,
+            target_occupation_id="manufacturing_worker",
+        ))
+        env.micro.state.health = 0.7
+        obs, reward, done, info = env.step(action=Action(career_move=CareerMove.MEDICAL_CARE))
+        self.assertFalse(info.get("action_rejected"))
+        flow = env.history[-1]["flow"]
+        self.assertLess(flow["medical_cost"], 0)
+        self.assertAlmostEqual(flow["medical_cost"], -env.config.medical_care_cost, places=2)
+
 
 if __name__ == "__main__":
     unittest.main()

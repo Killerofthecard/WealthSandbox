@@ -16,6 +16,7 @@ from wealthsandbox.validator import (
     guard_withdraw_amount,
     guard_borrow_amount,
     guard_repay_amount,
+    guard_rest,
 )
 
 
@@ -171,6 +172,23 @@ class TestGuardFunctions(unittest.TestCase):
         state = AgentState(job_status=JobStatus.UNEMPLOYED)
         r = guard_quit_job(state, self.career)
         self.assertFalse(r.allowed)
+
+    # --- guard_rest ---
+
+    def test_rest_rejected_when_fully_rested(self):
+        state = AgentState(health=1.0, energy=1.0)
+        r = guard_rest(state, self.career)
+        self.assertFalse(r.allowed)
+
+    def test_rest_allowed_when_low_health(self):
+        state = AgentState(health=0.5, energy=1.0)
+        r = guard_rest(state, self.career)
+        self.assertTrue(r.allowed)
+
+    def test_rest_allowed_when_low_energy(self):
+        state = AgentState(health=1.0, energy=0.3)
+        r = guard_rest(state, self.career)
+        self.assertTrue(r.allowed)
 
     # --- guard_deposit_amount ---
 
@@ -351,6 +369,34 @@ class TestActionValidator(unittest.TestCase):
         avail = validator.available_actions(state)
         self.assertFalse(avail["upskill"]["allowed"])
         self.assertIn("energy", avail["upskill"]["reason"].lower())
+
+    # --- rest / medical_care guards (via validator) ---
+
+    def test_rest_allowed_via_validator(self):
+        state = AgentState(health=0.5)
+        action = Action(career_move=CareerMove.REST)
+        r = self.validator.validate(action, state)
+        self.assertTrue(r.allowed)
+
+    def test_medical_care_allowed_with_cash(self):
+        state = AgentState(cash=5_000, health=0.5)
+        action = Action(career_move=CareerMove.MEDICAL_CARE)
+        r = self.validator.validate(action, state)
+        self.assertTrue(r.allowed)
+
+    def test_medical_care_rejected_insufficient_cash(self):
+        state = AgentState(cash=1_000, health=0.5)
+        action = Action(career_move=CareerMove.MEDICAL_CARE)
+        r = self.validator.validate(action, state)
+        self.assertFalse(r.allowed)
+        self.assertIn("cash", r.message.lower())
+
+    def test_medical_care_rejected_at_yearly_limit(self):
+        state = AgentState(cash=50_000, health=0.5, medical_care_uses_this_year=2)
+        action = Action(career_move=CareerMove.MEDICAL_CARE)
+        r = self.validator.validate(action, state)
+        self.assertFalse(r.allowed)
+        self.assertIn("times", r.message.lower())
 
     # --- Bank action-specific validators ---
 

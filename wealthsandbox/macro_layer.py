@@ -37,6 +37,10 @@ class MacroLayer:
         self.usrecm: int = 0           # 0 or 1
         self.fedfunds: float = 3.0     # % (e.g. 5.25 = 5.25%)
         self.sp500_tr: float = 0.0     # S&P 500 total return this month
+        self.cpi: float = 0.0          # CPI index level this month
+        self.inflation: float = 0.0    # month-over-month inflation (decimal)
+        self.price_level: float = 1.0  # cumulative CPI / base CPI (start = 1.0)
+        self._cpi_0: float = 0.0       # CPI at simulation start (price_level denominator)
 
         # Which cycle is being used
         self.current_cycle_label: str = ""
@@ -50,10 +54,11 @@ class MacroLayer:
             self._data_dir = os.path.join(project_root, self._data_dir)
         self._cycle_override: str = config.macro_cycle  # "" = random
         self._file_override: str = config.macro_cycle_file  # specific CSV file
+        self._continuous_file: str = config.macro_continuous_file  # single long CSV
         self._rng = random.Random(config.seed if config.seed is not None else 42)
 
-        # Rows: (unrate, usrecm, fedfunds, sp500_tr) — one per month, in order.
-        self._rows: List[Tuple[float, int, float, float]] = []
+        # Rows: (unrate, usrecm, fedfunds, sp500_tr, cpi) — one per month, in order.
+        self._rows: List[Tuple[float, int, float, float, float]] = []
         self._row_idx: int = 0
 
         self._load_next_cycle()
@@ -71,13 +76,28 @@ class MacroLayer:
         self._month_counter += 1
 
         if self._row_idx < len(self._rows):
-            self.unrate, self.usrecm, self.fedfunds, self.sp500_tr = self._rows[self._row_idx]
+            prev_cpi = self.cpi
+            self.unrate, self.usrecm, self.fedfunds, self.sp500_tr, self.cpi = self._rows[self._row_idx]
             self._row_idx += 1
+            # Month-over-month inflation (negative = deflation).
+            if prev_cpi > 0 and self.cpi > 0:
+                self.inflation = self.cpi / prev_cpi - 1.0
+            else:
+                self.inflation = 0.0
+            # Cumulative price level relative to the series' first month.
+            if self._cpi_0 > 0 and self.cpi > 0:
+                self.price_level = self.cpi / self._cpi_0
+            else:
+                self.price_level = 1.0
+        elif self._continuous_file:
+            # Continuous mode: series exhausted — freeze on the last row's
+            # values instead of chaining a random next cycle.
+            pass
         else:
+            # Cycle mode: series exhausted — load the next (random) cycle.
+            # _load_next_cycle() seeds current values with the new first row
+            # and resets price_level / inflation.
             self._load_next_cycle()
-            if self._rows:
-                self.unrate, self.usrecm, self.fedfunds, self.sp500_tr = self._rows[0]
-                self._row_idx = 1
 
         return self.snapshot()
 
@@ -89,6 +109,9 @@ class MacroLayer:
             "usrecm": self.usrecm,
             "fedfunds": self.fedfunds,
             "sp500_tr": self.sp500_tr,
+            "cpi": self.cpi,
+            "inflation": self.inflation,
+            "price_level": self.price_level,
         }
 
     def reset(self) -> None:
@@ -98,6 +121,10 @@ class MacroLayer:
         self.usrecm = 0
         self.fedfunds = 3.0
         self.sp500_tr = 0.0
+        self.cpi = 0.0
+        self.inflation = 0.0
+        self.price_level = 1.0
+        self._cpi_0 = 0.0
         self._load_next_cycle()
 
     # ------------------------------------------------------------------
@@ -107,7 +134,8 @@ class MacroLayer:
     def _load_next_cycle(self) -> None:
         """Pick a cycle CSV and load all rows.
 
-        Priority: ``macro_cycle_file`` > ``macro_cycle`` > random.
+        Priority: ``macro_continuous_file`` > ``macro_cycle_file`` >
+        ``macro_cycle`` > random.
         """
         self._rows.clear()
         self._row_idx = 0
@@ -115,8 +143,19 @@ class MacroLayer:
         path: Optional[str] = None
         pick_label = ""
 
+        # 0. Continuous mode — single long CSV at the data-dir root.
+        if self._continuous_file:
+            candidate = os.path.join(self._data_dir, self._continuous_file)
+            if not os.path.isfile(candidate):
+                raise FileNotFoundError(
+                    f"macro_continuous_file '{self._continuous_file}' not found "
+                    f"under '{self._data_dir}'"
+                )
+            path = candidate
+            pick_label = "continuous"
+
         # 1. Specific file override
-        if self._file_override:
+        elif self._file_override:
             for label in ("boom", "normal", "recession"):
                 candidate = os.path.join(self._data_dir, label, self._file_override)
                 if os.path.isfile(candidate):
@@ -161,9 +200,22 @@ class MacroLayer:
                     fedfunds = float(ff_str) if ff_str else 3.0
                     sp_str = row.get("SP500_TR", "").strip()
                     sp500_tr = float(sp_str) if sp_str else 0.0
+                    cpi_str = row.get("CPI", "").strip()
+                    cpi = float(cpi_str) if cpi_str else 0.0
                     self._rows.append((
                         float(row["UNRATE"]) / 100.0,
                         int(row["USREC"]),
                         fedfunds,
                         sp500_tr,
+                        cpi,
                     ))
+
+        # Seed "current" with the first row so the very first month's tick uses
+        # real data.  Fixes the off-by-one where month 1 previously ran on the
+        # hardcoded defaults and the series' last row was never experienced.
+        if self._rows:
+            self.unrate, self.usrecm, self.fedfunds, self.sp500_tr, self.cpi = self._rows[0]
+            self._row_idx = 1
+            self._cpi_0 = self.cpi if self.cpi > 0 else 0.0
+            self.price_level = 1.0
+            self.inflation = 0.0

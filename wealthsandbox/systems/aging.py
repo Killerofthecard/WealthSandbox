@@ -47,6 +47,7 @@ class AgingSystem(BaseSystem):
         total_months = macro.get("total_months", 0)
         if total_months > 0 and total_months % 12 == 0:
             state.age += 1
+            state.medical_care_uses_this_year = 0
             state.last_month_events.append(f"Turned {state.age}.")
 
     def check_dead(self, state: AgentState) -> Optional[str]:

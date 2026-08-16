@@ -31,6 +31,16 @@ class TestApplyToolCalls(unittest.TestCase):
         actions = WealthSandBoxEnv.apply_tool_calls(tcs)
         self.assertEqual(actions[0].career_move, CareerMove.INTENSIVE_WORK)
 
+    def test_rest_tool(self):
+        tcs = [ToolCall("rest", {})]
+        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        self.assertEqual(actions[0].career_move, CareerMove.REST)
+
+    def test_medical_care_tool(self):
+        tcs = [ToolCall("medical_care", {})]
+        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        self.assertEqual(actions[0].career_move, CareerMove.MEDICAL_CARE)
+
     def test_deposit_tool(self):
         tcs = [ToolCall("deposit", {"amount": 3000})]
         actions = WealthSandBoxEnv.apply_tool_calls(tcs)
@@ -74,10 +84,10 @@ class TestToolSchemas(unittest.TestCase):
 
     def test_tools_present(self):
         names = {t["function"]["name"] for t in TOOLS}
-        self.assertEqual(names, {"quit_job", "deposit", "withdraw", "borrow", "repay", "switch_occupation", "upskill", "intensive_work", "buy_stock", "sell_stock"})
+        self.assertEqual(names, {"quit_job", "deposit", "withdraw", "borrow", "repay", "switch_occupation", "upskill", "intensive_work", "buy_stock", "sell_stock", "rest", "medical_care"})
 
     def test_tool_count(self):
-        self.assertEqual(len(TOOLS), 10)
+        self.assertEqual(len(TOOLS), 12)
 
 
 class TestDecision(unittest.TestCase):

@@ -248,7 +248,8 @@ class CareerSystem(BaseSystem):
         living_expense: float = 2_000.0,
         intensive_work_months: int = 3,
         occ_skill_passive_months: int = 12,
-        layoff_base_rate: float = 0.05,
+        layoff_base_rate: float = 0.02,
+        rest_income_penalty: float = 0.20,
         seed: Optional[int] = None,
     ):
         self.occupations = occupations or dict(DEFAULT_OCCUPATIONS)
@@ -262,10 +263,12 @@ class CareerSystem(BaseSystem):
         self.intensive_work_months = intensive_work_months
         self.occ_skill_passive_months = occ_skill_passive_months
         self.layoff_base_rate = layoff_base_rate
+        self.rest_income_penalty = rest_income_penalty
         import random
         self._rng = random.Random(seed)
         # Macro-driven state
         self._income_mult: float = 1.0
+        self._price_level: float = 1.0
 
     # ------------------------------------------------------------------
     # Industry sensitivity for layoff and income
@@ -331,6 +334,7 @@ class CareerSystem(BaseSystem):
         """
         unrate = macro.get("unrate", 0.05)
         usrecm = macro.get("usrecm", 0)
+        self._price_level = macro.get("price_level", 1.0)
 
         # ---- 0. Set income multiplier from recession flag ----
         industry = self.get_industry(state)
@@ -359,19 +363,29 @@ class CareerSystem(BaseSystem):
         # ---- 4. Automatic income ----
         if self.has_occupation(state) and state.job_status == JobStatus.EMPLOYED:
             income = self.compute_monthly_after_tax_income(state)
+            if state.resting_this_month:
+                income = round(income * (1.0 - self.rest_income_penalty), 2)
             state.monthly_after_tax_income = income
             state.cash += income
+            state.record_flow("employment_income", income)
             tier = self._current_tier(state)
             occ = self.get_occupation(state.occupation_id)
-            state.last_month_events.append(
-                f"Earned ${income:,.0f} as {tier.name} {occ.display_name}."
-            )
+            if state.resting_this_month:
+                state.last_month_events.append(
+                    f"Earned ${income:,.0f} as {tier.name} {occ.display_name} "
+                    f"(reduced {self.rest_income_penalty:.0%} for resting)."
+                )
+            else:
+                state.last_month_events.append(
+                    f"Earned ${income:,.0f} as {tier.name} {occ.display_name}."
+                )
         elif self.has_occupation(state) and state.job_status == JobStatus.UNEMPLOYED:
             state.monthly_after_tax_income = 0.0
             state.last_month_events.append("Unemployed — no income this month.")
         else:
             state.monthly_after_tax_income = 0.0
             state.last_month_events.append("No occupation — no income this month.")
+        state.resting_this_month = False
 
         # ---- 3. Tenure & passive occ_skill & promotion ----
         if self.has_occupation(state) and state.job_status == JobStatus.EMPLOYED:
@@ -426,6 +440,7 @@ class CareerSystem(BaseSystem):
         salary = occ.base_monthly_salary * (1 + occ.skill_sensitivity * skill_delta)
         salary *= self._current_tier(state).salary_multiplier
         salary *= self._income_mult
+        salary *= self._price_level  # cost-of-living adjustment (nominal)
         return max(0.0, salary)
 
     def compute_monthly_after_tax_income(self, state: AgentState) -> float:
@@ -464,6 +479,7 @@ class CareerSystem(BaseSystem):
             return
 
         state.cash -= total_cost
+        state.record_flow("career_cost", -total_cost)
 
         if occ.training_months > 0:
             state.training_months_remaining = occ.training_months
@@ -493,6 +509,7 @@ class CareerSystem(BaseSystem):
             return
 
         state.cash -= self.upskill_cost
+        state.record_flow("career_cost", -self.upskill_cost)
         state.upskill_months_remaining = self.upskill_months
         state.last_month_events.append(
             f"Started upskilling (${self.upskill_cost:,.0f}, {self.upskill_months} months)."

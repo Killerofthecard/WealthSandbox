@@ -26,8 +26,10 @@ BORROW = "borrow"
 REPAY = "repay"
 BUY_STOCK = "buy_stock"
 SELL_STOCK = "sell_stock"
+REST = "rest"
+MEDICAL_CARE = "medical_care"
 
-ALL_TOOL_NAMES = {SWITCH_OCCUPATION, UPSKILL, INTENSIVE_WORK, QUIT_JOB, DEPOSIT, WITHDRAW, BORROW, REPAY, BUY_STOCK, SELL_STOCK}
+ALL_TOOL_NAMES = {SWITCH_OCCUPATION, UPSKILL, INTENSIVE_WORK, QUIT_JOB, DEPOSIT, WITHDRAW, BORROW, REPAY, BUY_STOCK, SELL_STOCK, REST, MEDICAL_CARE}
 
 
 # ---------------------------------------------------------------------------
@@ -48,6 +50,12 @@ def build_tools(
     occupations: Optional[Dict[str, Any]] = None,
     min_cash_buffer: float = 2_000.0,
     forced_sale_discount: float = 0.10,
+    rest_health_gain: float = 0.02,
+    rest_energy_gain: float = 0.3,
+    rest_income_penalty: float = 0.20,
+    medical_care_cost: float = 3_000.0,
+    medical_care_health_gain: float = 0.05,
+    medical_care_max_per_year: int = 2,
 ) -> List[Dict[str, Any]]:
     """Build the tool definitions with dynamic costs and occupation data."""
 
@@ -115,6 +123,23 @@ def build_tools(
         f"{occ_skill_passive_months} months of tenure — intensive_work "
         f"accelerates this.  Occupation skill is NOT carried when you switch "
         f"occupations.  Only available when employed."
+    )
+
+    # --- rest (recover health + energy, at the cost of income) ---
+    rest_desc = (
+        f"Take a month of light duty to recover.  Restores "
+        f"{rest_health_gain:.2f} health and {rest_energy_gain:.0%} energy, but "
+        f"you earn only {1 - rest_income_penalty:.0%} of your normal income "
+        f"this month.  Health and energy cannot exceed their maximum.  Useful "
+        f"when health is dropping toward your occupation's minimum, or energy "
+        f"is too low to upskill / work intensively."
+    )
+
+    # --- medical_care (pay cash to recover health) ---
+    medical_care_desc = (
+        f"Pay ${medical_care_cost:,.0f} for medical treatment, restoring "
+        f"{medical_care_health_gain:.2f} health immediately (capped at the "
+        f"maximum).  Limited to {medical_care_max_per_year} uses per year."
     )
 
     return [
@@ -232,6 +257,22 @@ def build_tools(
             "function": {
                 "name": "intensive_work",
                 "description": intensive_work_desc,
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "rest",
+                "description": rest_desc,
+                "parameters": {"type": "object", "properties": {}},
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "medical_care",
+                "description": medical_care_desc,
                 "parameters": {"type": "object", "properties": {}},
             },
         },

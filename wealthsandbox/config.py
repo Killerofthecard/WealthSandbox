@@ -67,9 +67,18 @@ class EnvConfig:
 
     # ---- health (age-accelerated decline — environment physics, not agent-controlled) ----
     health_decline_20_29: float = 0.0003  # per month, ages 20–29
-    health_decline_30_39: float = 0.001   # per month, ages 30–39
-    health_decline_40_49: float = 0.003   # per month, ages 40–49
-    health_decline_50_plus: float = 0.006 # per month, ages 50+
+    health_decline_30_39: float = 0.002   # per month, ages 30–39
+    health_decline_40_49: float = 0.006   # per month, ages 40–49
+    health_decline_50_plus: float = 0.012 # per month, ages 50+
+
+    # ---- wellbeing (health recovery via rest / medical_care) ----
+    health_max: float = 1.0                # ceiling health cannot exceed
+    rest_health_gain: float = 0.02         # health recovered by `rest`
+    rest_energy_gain: float = 0.3          # energy recovered by `rest`
+    rest_income_penalty: float = 0.20      # fraction of income lost in a month you rest
+    medical_care_cost: float = 3_000.0     # cash cost of `medical_care`
+    medical_care_health_gain: float = 0.05 # health recovered by `medical_care`
+    medical_care_max_per_year: int = 2     # max `medical_care` uses per year
 
     # ---- energy (short-term stamina — gates training pacing) ----
     energy_cost_per_upskill: float = 0.4          # one-time deduction when starting upskill
@@ -86,7 +95,8 @@ class EnvConfig:
     macro_data_dir: str = "raw_data"       # path to cycle CSV directories
     macro_cycle: str = ""                  # "boom" / "normal" / "recession" / "" (random)
     macro_cycle_file: str = ""             # specific CSV, e.g. "2008_2009.csv" (overrides macro_cycle)
-    layoff_base_rate: float = 0.05         # base monthly layoff probability (literature ~0.028)
+    macro_continuous_file: str = ""        # single long CSV at raw_data/ root (e.g. "1986_2025.csv"); reads the whole horizon and freezes on exhaustion
+    layoff_base_rate: float = 0.02         # base monthly layoff probability (literature ~0.028)
 
     # ---- misc ----
     seed: Optional[int] = None

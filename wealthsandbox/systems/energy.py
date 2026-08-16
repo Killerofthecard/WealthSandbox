@@ -30,6 +30,7 @@ class EnergySystem(BaseSystem):
         cost_per_intensive_work: float = 0.5,
         decline_per_training_month: float = 0.15,
         recovery_per_month: float = 0.10,
+        rest_energy_gain: float = 0.3,
     ):
         """
         Args:
@@ -39,11 +40,13 @@ class EnergySystem(BaseSystem):
             decline_per_training_month: Energy lost per month while training
                 for a new occupation.
             recovery_per_month: Energy regained per month when NOT training.
+            rest_energy_gain: Energy recovered by ``rest``.
         """
         self.cost_per_upskill = cost_per_upskill
         self.cost_per_intensive_work = cost_per_intensive_work
         self.decline_per_training_month = decline_per_training_month
         self.recovery_per_month = recovery_per_month
+        self.rest_energy_gain = rest_energy_gain
 
     # ------------------------------------------------------------------
     # BaseSystem protocol
@@ -70,4 +73,6 @@ class EnergySystem(BaseSystem):
             state.energy = max(0.0, state.energy - self.cost_per_upskill)
         elif action.career_move == CareerMove.INTENSIVE_WORK:
             state.energy = max(0.0, state.energy - self.cost_per_intensive_work)
+        elif action.career_move == CareerMove.REST:
+            state.energy = min(1.0, state.energy + self.rest_energy_gain)
         return False
