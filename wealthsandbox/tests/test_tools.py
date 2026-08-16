@@ -11,52 +11,61 @@ class TestApplyToolCalls(unittest.TestCase):
 
     def test_quit_job_tool(self):
         tcs = [ToolCall("quit_job", {})]
-        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
         self.assertIsInstance(actions, list)
         self.assertEqual(actions[0].career_move, CareerMove.QUIT_JOB)
+        self.assertEqual(issues, [])
 
     def test_switch_occupation_tool(self):
         tcs = [ToolCall("switch_occupation", {"occupation_id": "nurse"})]
-        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
         self.assertEqual(actions[0].career_move, CareerMove.SWITCH_OCCUPATION)
         self.assertEqual(actions[0].target_occupation_id, "nurse")
+        self.assertEqual(issues, [])
 
     def test_upskill_tool(self):
         tcs = [ToolCall("upskill", {})]
-        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
         self.assertEqual(actions[0].career_move, CareerMove.UPSKILL)
+        self.assertEqual(issues, [])
 
     def test_intensive_work_tool(self):
         tcs = [ToolCall("intensive_work", {})]
-        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
         self.assertEqual(actions[0].career_move, CareerMove.INTENSIVE_WORK)
+        self.assertEqual(issues, [])
 
     def test_rest_tool(self):
         tcs = [ToolCall("rest", {})]
-        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
         self.assertEqual(actions[0].career_move, CareerMove.REST)
+        self.assertEqual(issues, [])
 
     def test_medical_care_tool(self):
         tcs = [ToolCall("medical_care", {})]
-        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
         self.assertEqual(actions[0].career_move, CareerMove.MEDICAL_CARE)
+        self.assertEqual(issues, [])
 
     def test_deposit_tool(self):
         tcs = [ToolCall("deposit", {"amount": 3000})]
-        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
         self.assertEqual(actions[0].career_move, CareerMove.DEPOSIT)
         self.assertEqual(actions[0].amount, 3000)
+        self.assertEqual(issues, [])
 
     def test_withdraw_tool(self):
         tcs = [ToolCall("withdraw", {"amount": 1500})]
-        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
         self.assertEqual(actions[0].career_move, CareerMove.WITHDRAW)
         self.assertEqual(actions[0].amount, 1500)
+        self.assertEqual(issues, [])
 
     def test_defaults_when_no_tools(self):
-        actions = WealthSandBoxEnv.apply_tool_calls([])
+        actions, issues = WealthSandBoxEnv.apply_tool_calls([])
         self.assertEqual(len(actions), 1)
         self.assertEqual(actions[0].career_move, CareerMove.NONE)
+        self.assertEqual(issues, [])
 
     def test_multiple_tools_in_one_month(self):
         """Agent can call deposit + upskill in the same month."""
@@ -64,20 +73,32 @@ class TestApplyToolCalls(unittest.TestCase):
             ToolCall("deposit", {"amount": 3000}),
             ToolCall("upskill", {}),
         ]
-        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
         self.assertEqual(len(actions), 2)
         moves = [a.career_move for a in actions]
         self.assertIn(CareerMove.DEPOSIT, moves)
         self.assertIn(CareerMove.UPSKILL, moves)
+        self.assertEqual(issues, [])
 
-    def test_duplicate_tool_ignored(self):
+    def test_duplicate_tool_not_deduped(self):
+        """Two switch calls become two actions (no silent dedup)."""
         tcs = [
             ToolCall("switch_occupation", {"occupation_id": "nurse"}),
             ToolCall("switch_occupation", {"occupation_id": "software_engineer"}),
         ]
-        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
-        self.assertEqual(len(actions), 1)
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
+        self.assertEqual(len(actions), 2)
         self.assertEqual(actions[0].target_occupation_id, "nurse")
+        self.assertEqual(actions[1].target_occupation_id, "software_engineer")
+        self.assertEqual(issues, [])
+
+    def test_unknown_tool_reports_issue(self):
+        tcs = [ToolCall("not_a_real_tool", {})]
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0].career_move, CareerMove.NONE)
+        self.assertEqual(len(issues), 1)
+        self.assertIn("not_a_real_tool", issues[0])
 
 
 class TestToolSchemas(unittest.TestCase):

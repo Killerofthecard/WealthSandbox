@@ -135,6 +135,12 @@ class AssetSystem(BaseSystem):
         if state.stock_value > 0 and state.total_invested > 0:
             fraction = amount / state.stock_value
             state.total_invested -= state.total_invested * fraction
+            # Keep the return base consistent with the proportional cost basis:
+            # this month's purchases shrink in the same proportion, so tick()'s
+            # `pre_existing = stock_value - purchases` never over-subtracts.
+            purchases = getattr(state, "_this_month_stock_purchases", 0.0)
+            if purchases > 0:
+                state._this_month_stock_purchases = purchases - purchases * fraction
         state.total_invested = max(0.0, state.total_invested)
 
         state.stock_value -= amount

@@ -498,6 +498,11 @@ class CareerSystem(BaseSystem):
 
         Costs $ and energy (deducted by EnergySystem).
         """
+        if state.training_months_remaining > 0:
+            state.last_month_events.append(
+                f"Cannot upskill while training for {state.training_target_occupation}."
+            )
+            return
         if state.general_skill >= self.max_general_skill:
             state.last_month_events.append("Already at maximum general skill.")
             return

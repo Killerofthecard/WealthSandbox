@@ -105,6 +105,17 @@ class TestGuardFunctions(unittest.TestCase):
         r = guard_upskill(state, self.career)
         self.assertFalse(r.allowed)
 
+    def test_upskill_blocked_during_training(self):
+        state = AgentState(
+            general_skill=3,
+            cash=10_000,
+            training_months_remaining=3,
+            training_target_occupation="software_engineer",
+        )
+        r = guard_upskill(state, self.career)
+        self.assertFalse(r.allowed)
+        self.assertIn("training", r.message.lower())
+
     def test_upskill_allowed(self):
         state = AgentState(general_skill=3, cash=10_000)
         r = guard_upskill(state, self.career)
@@ -340,7 +351,7 @@ class TestActionValidator(unittest.TestCase):
             occupation_skills={"manufacturing_worker": 1},
         )
         avail = self.validator.available_actions(state)
-        self.assertTrue(avail["upskill"]["allowed"])
+        self.assertFalse(avail["upskill"]["allowed"])
         self.assertTrue(avail["quit_job"]["allowed"])
         self.assertFalse(avail["switch_occupation"]["allowed"])
 

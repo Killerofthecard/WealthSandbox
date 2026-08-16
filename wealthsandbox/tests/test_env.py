@@ -82,22 +82,90 @@ class TestWealthSandBoxEnv(unittest.TestCase):
     def test_apply_tool_calls_quit(self):
         from wealthsandbox.agents.tools import ToolCall
         tcs = [ToolCall(tool_name="quit_job", parameters={})]
-        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
         self.assertEqual(actions[0].career_move, CareerMove.QUIT_JOB)
+        self.assertEqual(issues, [])
 
     def test_apply_tool_calls_switch(self):
         from wealthsandbox.agents.tools import ToolCall
         tcs = [ToolCall(tool_name="switch_occupation",
                          parameters={"occupation_id": "nurse"})]
-        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
         self.assertEqual(actions[0].career_move, CareerMove.SWITCH_OCCUPATION)
         self.assertEqual(actions[0].target_occupation_id, "nurse")
+        self.assertEqual(issues, [])
 
     def test_apply_tool_calls_upskill(self):
         from wealthsandbox.agents.tools import ToolCall
         tcs = [ToolCall(tool_name="upskill", parameters={})]
-        actions = WealthSandBoxEnv.apply_tool_calls(tcs)
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
         self.assertEqual(actions[0].career_move, CareerMove.UPSKILL)
+        self.assertEqual(issues, [])
+
+    # --- apply_tool_calls no longer deduplicates, unknown tools surface ---
+
+    def test_apply_tool_calls_keeps_duplicates(self):
+        """Two deposits must become two actions — no silent dedup."""
+        from wealthsandbox.agents.tools import ToolCall
+        tcs = [
+            ToolCall(tool_name="deposit", parameters={"amount": 1000}),
+            ToolCall(tool_name="deposit", parameters={"amount": 2000}),
+        ]
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
+        self.assertEqual(len(actions), 2)
+        self.assertEqual(actions[0].amount, 1000)
+        self.assertEqual(actions[1].amount, 2000)
+        self.assertEqual(issues, [])
+
+    def test_apply_tool_calls_unknown_tool_reports_issue(self):
+        from wealthsandbox.agents.tools import ToolCall
+        tcs = [ToolCall(tool_name="fly_to_mars", parameters={})]
+        actions, issues = WealthSandBoxEnv.apply_tool_calls(tcs)
+        # The unknown tool yields a NONE placeholder action plus an issue.
+        self.assertEqual(actions[0].career_move, CareerMove.NONE)
+        self.assertEqual(len(issues), 1)
+        self.assertIn("fly_to_mars", issues[0])
+
+    def test_step_rejects_unknown_tool(self):
+        from wealthsandbox.agents.tools import ToolCall
+        env = WealthSandBoxEnv(EnvConfig(seed=1))
+        env.reset(seed=1)
+        tcs = [ToolCall(tool_name="fly_to_mars", parameters={})]
+        obs, reward, done, info = env.step(tool_calls=tcs)
+        self.assertTrue(info.get("action_rejected"))
+        self.assertIn("fly_to_mars", info.get("rejection_message", ""))
+        self.assertEqual(env.macro.total_months, 0)  # month NOT advanced
+
+    # --- Batch conflict guards (order semantics) ---
+
+    def test_batch_quit_plus_switch_rejected(self):
+        from wealthsandbox.agents.tools import ToolCall
+        env = WealthSandBoxEnv(EnvConfig(seed=1))
+        env.reset(seed=1)
+        tcs = [
+            ToolCall(tool_name="switch_occupation",
+                     parameters={"occupation_id": "nurse"}),
+            ToolCall(tool_name="quit_job", parameters={}),
+        ]
+        obs, reward, done, info = env.step(tool_calls=tcs)
+        self.assertTrue(info.get("action_rejected"))
+        self.assertIn("quit", info.get("rejection_message", "").lower())
+        self.assertEqual(env.macro.total_months, 0)
+
+    def test_batch_two_switches_rejected(self):
+        from wealthsandbox.agents.tools import ToolCall
+        env = WealthSandBoxEnv(EnvConfig(seed=1))
+        env.reset(seed=1)
+        tcs = [
+            ToolCall(tool_name="switch_occupation",
+                     parameters={"occupation_id": "nurse"}),
+            ToolCall(tool_name="switch_occupation",
+                     parameters={"occupation_id": "manufacturing_worker"}),
+        ]
+        obs, reward, done, info = env.step(tool_calls=tcs)
+        self.assertTrue(info.get("action_rejected"))
+        self.assertIn("one occupation", info.get("rejection_message", "").lower())
+        self.assertEqual(env.macro.total_months, 0)
 
     # ------------------------------------------------------------------
     # In-month retry (action rejected → retry without consuming the month)

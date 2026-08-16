@@ -95,6 +95,12 @@ def guard_switch_occupation_target(
 
 
 def guard_upskill(state: AgentState, career) -> GuardResult:
+    if state.training_months_remaining > 0:
+        return GuardResult.reject(
+            "upskill_rejected_during_training",
+            f"Cannot upskill while training for {state.training_target_occupation} "
+            f"({state.training_months_remaining} months remaining).",
+        )
     if state.general_skill >= career.max_general_skill:
         return GuardResult.reject(
             "upskill_rejected_at_max_skill",

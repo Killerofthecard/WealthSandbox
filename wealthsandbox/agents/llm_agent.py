@@ -147,7 +147,12 @@ tool**.  Call tools only when you want to **change** something.
 
 ## One shot per month
 Each turn you make exactly ONE response.  In that single response you can
-call **multiple tools at once** — they execute in the order you list them.
+call **multiple tools at once** — they execute in the order you list them,
+and each is validated against the state left by the previous one (so a
+`buy_stock` can spend cash that an earlier `withdraw` just released from
+savings, but not cash an earlier `deposit` just locked away).  Contradictory
+combinations (quitting and switching occupation in the same month, or two
+different switches) are rejected — choose ONE career move per month.
 After your tools finish, the month ends (living expenses, health decline,
 etc.) and you won't get another chance until next month.
 

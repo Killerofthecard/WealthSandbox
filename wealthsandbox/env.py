@@ -247,15 +247,34 @@ class WealthSandBoxEnv:
         import copy
 
         if tool_calls is not None:
-            actions: List[Action] = self.apply_tool_calls(tool_calls)
+            actions, issues = self.apply_tool_calls(tool_calls)
         elif action is not None:
-            actions = [action]
+            actions, issues = [action], []
         else:
-            actions = [Action()]
+            actions, issues = [Action()], []
 
         state = self.micro.state
         state.last_month_events.clear()
         state.monthly_flow = {}
+
+        # Reject malformed batches (unknown tool names) before any state change.
+        if issues:
+            state.last_month_events.append("rejected:" + issues[0])
+            obs = self._make_observation()
+            return obs, 0.0, False, {
+                "action_rejected": True,
+                "rejection_message": issues[0],
+            }
+
+        # Reject self-contradictory batches (quit + switch, two switches).
+        conflict = self._check_batch_conflicts(actions)
+        if conflict:
+            state.last_month_events.append("rejected:" + conflict)
+            obs = self._make_observation()
+            return obs, 0.0, False, {
+                "action_rejected": True,
+                "rejection_message": conflict,
+            }
 
         # ---- Phase 1: validate + execute actions -------------------------
         # Validate on a deepcopy so rejections leave real state untouched.
@@ -358,6 +377,23 @@ class WealthSandBoxEnv:
         obs = self._make_observation()
         info: Dict[str, Any] = {"termination_reason": reason}
         return obs, reward, done, info
+
+    def _check_batch_conflicts(self, actions: List[Action]) -> Optional[str]:
+        """Return a rejection message if *actions* are self-contradictory.
+
+        Two discrete career moves cannot meaningfully coexist in one month:
+        you can only pursue one target occupation, and quitting precludes
+        switching (or vice versa).
+        """
+        switches = [
+            a for a in actions if a.career_move == CareerMove.SWITCH_OCCUPATION
+        ]
+        has_quit = any(a.career_move == CareerMove.QUIT_JOB for a in actions)
+        if len(switches) > 1:
+            return "You can only switch to one occupation per month."
+        if has_quit and switches:
+            return "You cannot quit your job and switch occupations in the same month."
+        return None
 
     def _validate_action(self, action: Action, state: AgentState):
         """Dispatch to the appropriate action-specific validator."""
@@ -514,18 +550,19 @@ class WealthSandBoxEnv:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def apply_tool_calls(tool_calls: List[ToolCall]) -> List[Action]:
-        """Convert LLM tool calls into a list of environment Actions.
+    def apply_tool_calls(
+        tool_calls: List[ToolCall],
+    ) -> Tuple[List[Action], List[str]]:
+        """Convert LLM tool calls into environment Actions.
 
-        Each tool call becomes one Action.  Multiple tools can be called in
-        one month — e.g. ``deposit(3000)`` + ``upskill()``.
+        Each tool call becomes one Action, **in the order the LLM listed
+        them** — no deduplication: two ``deposit`` calls are two deposits.
+        Unknown tool names are collected into *issues* so the caller can
+        reject the month with feedback instead of silently dropping them.
         """
         actions: List[Action] = []
-        seen: set = set()
+        issues: List[str] = []
         for tc in tool_calls:
-            if tc.tool_name in seen:
-                continue
-            seen.add(tc.tool_name)
             params = tc.parameters or {}
 
             if tc.tool_name == SWITCH_OCCUPATION:
@@ -573,10 +610,12 @@ class WealthSandBoxEnv:
                 actions.append(Action(career_move=CareerMove.REST))
             elif tc.tool_name == MEDICAL_CARE:
                 actions.append(Action(career_move=CareerMove.MEDICAL_CARE))
+            else:
+                issues.append(f"Unknown tool '{tc.tool_name}'.")
 
         if not actions:
             actions.append(Action(career_move=CareerMove.NONE))
-        return actions
+        return actions, issues
 
     # ------------------------------------------------------------------
     # Observation assembly
