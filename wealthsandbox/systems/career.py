@@ -47,6 +47,9 @@ class Occupation:
         entry_cost: One-time training / certification fee (in addition to
             the base switch cost).
         training_months: Months of training required before working.
+        energy_footprint: Fraction of the agent's energy capacity this
+            occupation occupies while employed (occupancy model — different
+            jobs demand different amounts of energy).
         tiers: Career ladder rungs.  Tier 0 is the starting rung.
     """
     occupation_id: str
@@ -58,6 +61,7 @@ class Occupation:
     min_health: float = 0.0
     entry_cost: float = 0.0
     training_months: int = 0
+    energy_footprint: float = 0.5
     tiers: Tuple[Tier, ...] = (
         Tier("Standard", min_occ_skill=1, min_tenure_months=0, salary_multiplier=1.0),
     )
@@ -87,6 +91,7 @@ DEFAULT_OCCUPATIONS: Dict[str, Occupation] = {
             min_health=0.3,
             entry_cost=10_000.0,
             training_months=4,
+            energy_footprint=0.55,
             tiers=(
                 Tier("Junior",      min_occ_skill=1, min_tenure_months=0,  salary_multiplier=1.0),
                 Tier("Mid-level",   min_occ_skill=3, min_tenure_months=18, salary_multiplier=1.35),
@@ -105,6 +110,7 @@ DEFAULT_OCCUPATIONS: Dict[str, Occupation] = {
             min_health=0.3,
             entry_cost=10_000.0,
             training_months=4,
+            energy_footprint=0.55,
             tiers=(
                 Tier("Junior",      min_occ_skill=1, min_tenure_months=0,  salary_multiplier=1.0),
                 Tier("Mid-level",   min_occ_skill=3, min_tenure_months=18, salary_multiplier=1.40),
@@ -124,6 +130,7 @@ DEFAULT_OCCUPATIONS: Dict[str, Occupation] = {
             min_health=0.4,
             entry_cost=12_000.0,
             training_months=6,
+            energy_footprint=0.60,
             tiers=(
                 Tier("Analyst",     min_occ_skill=1, min_tenure_months=0,  salary_multiplier=1.0),
                 Tier("Associate",   min_occ_skill=4, min_tenure_months=24, salary_multiplier=1.40),
@@ -142,6 +149,7 @@ DEFAULT_OCCUPATIONS: Dict[str, Occupation] = {
             min_health=0.3,
             entry_cost=5_000.0,
             training_months=3,
+            energy_footprint=0.50,
             tiers=(
                 Tier("Junior",      min_occ_skill=1, min_tenure_months=0,  salary_multiplier=1.0),
                 Tier("Mid-level",   min_occ_skill=3, min_tenure_months=12, salary_multiplier=1.31),
@@ -161,6 +169,7 @@ DEFAULT_OCCUPATIONS: Dict[str, Occupation] = {
             min_health=0.6,
             entry_cost=0.0,
             training_months=0,
+            energy_footprint=0.50,
             tiers=(
                 Tier("Apprentice",  min_occ_skill=1, min_tenure_months=0,  salary_multiplier=1.0),
                 Tier("Skilled",     min_occ_skill=3, min_tenure_months=12, salary_multiplier=1.30),
@@ -179,6 +188,7 @@ DEFAULT_OCCUPATIONS: Dict[str, Occupation] = {
             min_health=0.5,
             entry_cost=4_000.0,
             training_months=3,
+            energy_footprint=0.55,
             tiers=(
                 Tier("Staff Nurse", min_occ_skill=1, min_tenure_months=0,  salary_multiplier=1.0),
                 Tier("Senior Nurse",min_occ_skill=4, min_tenure_months=24, salary_multiplier=1.20),
@@ -196,6 +206,7 @@ DEFAULT_OCCUPATIONS: Dict[str, Occupation] = {
             min_health=0.3,
             entry_cost=1_000.0,
             training_months=2,
+            energy_footprint=0.45,
             tiers=(
                 Tier("Junior Officer",  min_occ_skill=1, min_tenure_months=0,  salary_multiplier=1.0),
                 Tier("Senior Officer",  min_occ_skill=4, min_tenure_months=36, salary_multiplier=1.24),
@@ -385,7 +396,6 @@ class CareerSystem(BaseSystem):
         else:
             state.monthly_after_tax_income = 0.0
             state.last_month_events.append("No occupation — no income this month.")
-        state.resting_this_month = False
 
         # ---- 3. Tenure & passive occ_skill & promotion ----
         if self.has_occupation(state) and state.job_status == JobStatus.EMPLOYED:

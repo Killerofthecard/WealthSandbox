@@ -357,11 +357,18 @@ def guard_sell_stock_amount(
 
 
 def guard_rest(state: AgentState, career) -> GuardResult:
-    """rest is always legal unless there is literally nothing to recover."""
-    if state.health >= 1.0 and state.energy >= 1.0:
+    """rest is legal unless there is nothing to recover: full health and no
+    temporary occupancy (training/upskill/intensive work) to release."""
+    has_temp_load = (
+        state.training_months_remaining > 0
+        or state.upskill_months_remaining > 0
+        or state.intensive_work_months_remaining > 0
+    )
+    if state.health >= 1.0 and not has_temp_load:
         return GuardResult.reject(
             "rest_rejected_fully_rested",
-            "Already fully rested and energized — resting would only cost income.",
+            "Already fully rested with no training/upskill/intensive work "
+            "to recover from — resting would only cost income.",
         )
     return GuardResult.ok()
 
@@ -402,8 +409,8 @@ class ActionValidator:
             if state.energy < threshold:
                 return GuardResult.reject(
                     "rejected_energy_too_low",
-                    f"Not enough energy: need ≥{threshold:.0%}, "
-                    f"have {state.energy:.0%}.  Rest (do nothing) to recover.",
+                    f"Not enough available energy: need ≥{threshold:.0%}, "
+                    f"have {state.energy:.0%}.",
                 )
             return GuardResult.ok()
 

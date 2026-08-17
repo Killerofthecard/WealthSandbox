@@ -59,7 +59,7 @@ def _extract_rejection(events: List[str]) -> str:
         ("upskill_rejected_insufficient_cash", "Insufficient cash to upskill"),
         ("upskill_rejected_at_max_skill", "Already at maximum general skill"),
         ("upskill_rejected_already_in_progress", "An upskill is already in progress"),
-        ("rejected_energy_too_low", "Not enough energy — rest first"),
+        ("rejected_energy_too_low", "Not enough available energy"),
         ("intensive_work_rejected_not_employed", "Must be employed to do intensive work"),
         ("intensive_work_rejected_at_max_occ_skill", "Already at maximum occupation skill"),
         ("intensive_work_rejected_already_in_progress", "Intensive work already in progress"),
@@ -96,29 +96,30 @@ def _build_default_systems(config: EnvConfig) -> List[BaseSystem]:
     asset = AssetSystem(
         forced_sale_discount=config.forced_sale_discount,
     )
+    career = CareerSystem(
+        occupations=None,  # use DEFAULT_OCCUPATIONS
+        upskill_cost=config.upskill_cost,
+        upskill_months=config.upskill_months,
+        upskill_skill_boost=config.upskill_skill_boost,
+        max_general_skill=config.max_skill_level,
+        max_occ_skill=config.max_skill_level,
+        switch_base_cost=config.switch_occupation_base_cost,
+        living_expense=config.monthly_living_expense,
+        intensive_work_months=config.intensive_work_months,
+        occ_skill_passive_months=config.occ_skill_passive_months,
+        layoff_base_rate=config.layoff_base_rate,
+        rest_income_penalty=config.rest_income_penalty,
+        seed=config.seed,
+    )
     return [
-        CareerSystem(
-            occupations=None,  # use DEFAULT_OCCUPATIONS
-            upskill_cost=config.upskill_cost,
-            upskill_months=config.upskill_months,
-            upskill_skill_boost=config.upskill_skill_boost,
-            max_general_skill=config.max_skill_level,
-            max_occ_skill=config.max_skill_level,
-            switch_base_cost=config.switch_occupation_base_cost,
-            living_expense=config.monthly_living_expense,
-            intensive_work_months=config.intensive_work_months,
-            occ_skill_passive_months=config.occ_skill_passive_months,
-            layoff_base_rate=config.layoff_base_rate,
-            rest_income_penalty=config.rest_income_penalty,
-            seed=config.seed,
-        ),
+        career,
         asset,
         EnergySystem(
-            cost_per_upskill=config.energy_cost_per_upskill,
-            cost_per_intensive_work=config.energy_cost_per_intensive_work,
-            decline_per_training_month=config.energy_decline_per_training_month,
-            recovery_per_month=config.energy_recovery_per_month,
-            rest_energy_gain=config.rest_energy_gain,
+            career=career,
+            capacity=config.energy_capacity,
+            training_footprint=config.training_energy_footprint,
+            upskill_footprint=config.upskill_energy_footprint,
+            intensive_footprint=config.intensive_work_energy_footprint,
         ),
         LivingExpenseSystem(
             monthly_living_expense=config.monthly_living_expense,
@@ -308,12 +309,17 @@ class WealthSandBoxEnv:
         macro_snapshot = self.macro.snapshot()
         for sys in self.systems:
             sys.tick(state, macro_snapshot)
+        state.resting_this_month = False
 
         # ---- Phase 3: finalise (expenses, health, calendar, death) --------
+        # Advance the calendar first (aging reads total_months to detect
+        # birthdays), but settle THIS month with this month's interest rate
+        # and price level — finalize and the observation must not see next
+        # month's data.
         self.macro.step()
-        macro_post = self.macro.snapshot()
+        macro_snapshot["total_months"] = self.macro.total_months
         for sys in self.systems:
-            sys.finalize(state, macro_post)
+            sys.finalize(state, macro_snapshot)
 
         done = False
         reason = ""
@@ -359,12 +365,15 @@ class WealthSandBoxEnv:
             "training_months_remaining": state.training_months_remaining,
             "events": list(state.last_month_events),
             "macro": {
-                "unrate": round(self.macro.unrate, 4),
-                "usrecm": self.macro.usrecm,
-                "fedfunds": round(self.macro.fedfunds, 2),
+                "unrate": round(macro_snapshot.get("unrate", 0.0), 4),
+                "usrecm": macro_snapshot.get("usrecm", 0),
+                "fedfunds": round(macro_snapshot.get("fedfunds", 0.0), 2),
                 "cycle_label": getattr(self.macro, "current_cycle_label", ""),
                 "cycle_file": getattr(self.macro, "current_cycle_file", ""),
-                "economy_status": _economy_status(self.macro.unrate, self.macro.usrecm),
+                "economy_status": _economy_status(
+                    macro_snapshot.get("unrate", 0.05),
+                    macro_snapshot.get("usrecm", 0),
+                ),
             },
             # Reward decomposition: this month's component flows + running totals.
             "reward": reward,
@@ -513,15 +522,15 @@ class WealthSandBoxEnv:
                         # wellbeing (health recovery via rest / medical_care)
                         "health_max": self.config.health_max,
                         "rest_health_gain": self.config.rest_health_gain,
-                        "rest_energy_gain": self.config.rest_energy_gain,
                         "rest_income_penalty": self.config.rest_income_penalty,
                         "medical_care_cost": self.config.medical_care_cost,
                         "medical_care_health_gain": self.config.medical_care_health_gain,
                         "medical_care_max_per_year": self.config.medical_care_max_per_year,
-                        # energy (stamina / pacing)
-                        "energy_cost_per_upskill": self.config.energy_cost_per_upskill,
-                        "energy_decline_per_training_month": self.config.energy_decline_per_training_month,
-                        "energy_recovery_per_month": self.config.energy_recovery_per_month,
+                        # energy (occupancy model)
+                        "energy_capacity": self.config.energy_capacity,
+                        "training_energy_footprint": self.config.training_energy_footprint,
+                        "upskill_energy_footprint": self.config.upskill_energy_footprint,
+                        "intensive_work_energy_footprint": self.config.intensive_work_energy_footprint,
                         "energy_threshold_for_upskill": self.config.energy_threshold_for_upskill,
                         "macro_cycle": self.config.macro_cycle or "random",
                     },
@@ -720,6 +729,13 @@ class WealthSandBoxEnv:
         rejection = _extract_rejection(self.micro.state.last_month_events)
         if rejection:
             narrative = f"⚠️ LAST ACTION REJECTED: {rejection}. " + narrative
+
+        # Strip raw macro numbers from the observation.  The agent must sense
+        # the economy through qualitative status + its own state, never the
+        # underlying series — sp500_tr in particular would leak this month's
+        # (not-yet-realised) market return.
+        for key in ("sp500_tr", "fedfunds", "unrate", "usrecm", "cpi"):
+            macro_snapshot.pop(key, None)
 
         return Observation(
             individual=self.micro.snapshot(),

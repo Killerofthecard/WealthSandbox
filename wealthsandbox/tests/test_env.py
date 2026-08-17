@@ -371,7 +371,7 @@ class TestWealthSandBoxEnv(unittest.TestCase):
 
     # --- rest / medical_care flow ---
 
-    def test_rest_recovers_health_energy_and_penalizes_income(self):
+    def test_rest_recovers_health_and_penalizes_income(self):
         env = WealthSandBoxEnv(EnvConfig(seed=1))
         env.reset(seed=1)
         env.step(action=Action(
@@ -382,14 +382,15 @@ class TestWealthSandBoxEnv(unittest.TestCase):
         env.step(action=Action(career_move=CareerMove.NONE))
         normal_income = env.micro.state.monthly_after_tax_income
 
-        # Lower health/energy so rest is legal (health still above job's 0.6 min)
+        # Lower health so rest is legal (still above the job's 0.6 min_health)
         env.micro.state.health = 0.7
-        env.micro.state.energy = 0.5
         obs, reward, done, info = env.step(action=Action(career_move=CareerMove.REST))
         self.assertFalse(info.get("action_rejected"))
-        # health recovered (+0.04, net of tiny age decline); energy recovered
+        # health recovered
         self.assertGreater(env.micro.state.health, 0.7)
-        self.assertGreater(env.micro.state.energy, 0.8)
+        # rest only releases non-work occupancy; the job's own 0.50 footprint
+        # remains, so available energy = 1.0 − 0.50 = 0.50
+        self.assertAlmostEqual(env.micro.state.energy, 0.50, places=2)
         # rest month earns 20% less
         self.assertLess(env.micro.state.monthly_after_tax_income, normal_income)
         # flag cleared after the month

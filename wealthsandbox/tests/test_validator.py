@@ -196,8 +196,9 @@ class TestGuardFunctions(unittest.TestCase):
         r = guard_rest(state, self.career)
         self.assertTrue(r.allowed)
 
-    def test_rest_allowed_when_low_energy(self):
-        state = AgentState(health=1.0, energy=0.3)
+    def test_rest_allowed_when_temp_occupancy(self):
+        # health is full, but training occupies energy → rest is legal to release it
+        state = AgentState(health=1.0, training_months_remaining=3)
         r = guard_rest(state, self.career)
         self.assertTrue(r.allowed)
 

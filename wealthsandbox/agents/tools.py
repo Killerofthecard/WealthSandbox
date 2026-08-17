@@ -43,7 +43,9 @@ def build_tools(
     upskill_skill_boost: int = 1,
     max_general_skill: int = 10,
     switch_base_cost: float = 2_000.0,
-    energy_threshold: float = 0.4,
+    energy_threshold: float = 0.30,
+    upskill_energy_footprint: float = 0.15,
+    intensive_work_energy_footprint: float = 0.20,
     intensive_work_months: int = 3,
     max_occ_skill: int = 10,
     occ_skill_passive_months: int = 12,
@@ -51,7 +53,6 @@ def build_tools(
     min_cash_buffer: float = 2_000.0,
     forced_sale_discount: float = 0.10,
     rest_health_gain: float = 0.02,
-    rest_energy_gain: float = 0.3,
     rest_income_penalty: float = 0.20,
     medical_care_cost: float = 3_000.0,
     medical_care_health_gain: float = 0.05,
@@ -106,8 +107,9 @@ def build_tools(
         f"(max {max_general_skill}).  General skill determines which "
         f"occupations you can enter and also boosts your salary in ANY "
         f"occupation via the skill-sensitivity formula.  "
-        f"Costs ${upskill_cost:,.0f} + {energy_threshold:.0%} energy.  "
-        f"Takes {upskill_months} months (you continue working normally).  "
+        f"Costs ${upskill_cost:,.0f} and occupies {upskill_energy_footprint:.0%} "
+        f"of your energy for {upskill_months} months (you continue working "
+        f"normally).  "
         f"Cannot start a new upskill while one is already in progress."
     )
 
@@ -117,7 +119,7 @@ def build_tools(
         f"in your current job by +1 (max {max_occ_skill}).  Occupation skill "
         f"determines your tier (Junior → Mid-level → Senior → ...) and "
         f"therefore your salary multiplier.  "
-        f"Costs {energy_threshold:.0%}+ energy — NO cash cost.  "
+        f"Occupies {intensive_work_energy_footprint:.0%} of your energy — NO cash cost.  "
         f"Takes {intensive_work_months} months (you continue working normally).  "
         f"Note: occupation skill grows passively by +1 every "
         f"{occ_skill_passive_months} months of tenure — intensive_work "
@@ -128,11 +130,12 @@ def build_tools(
     # --- rest (recover health + energy, at the cost of income) ---
     rest_desc = (
         f"Take a month of light duty to recover.  Restores "
-        f"{rest_health_gain:.2f} health and {rest_energy_gain:.0%} energy, but "
-        f"you earn only {1 - rest_income_penalty:.0%} of your normal income "
-        f"this month.  Health and energy cannot exceed their maximum.  Useful "
-        f"when health is dropping toward your occupation's minimum, or energy "
-        f"is too low to upskill / work intensively."
+        f"{rest_health_gain:.2f} health and releases the non-work energy "
+        f"occupancy (training/upskill/intensive work) this month, but you "
+        f"earn only {1 - rest_income_penalty:.0%} of your normal income this "
+        f"month.  It cannot reduce your job's own energy occupancy.  Useful "
+        f"when health is dropping toward your occupation's minimum, or your "
+        f"free energy is too low to upskill / work intensively."
     )
 
     # --- medical_care (pay cash to recover health) ---

@@ -37,11 +37,10 @@ def _build_system_prompt(
     max_occ_skill: int = 10,
     switch_base_cost: float = 2_000.0,
     tax_rate: float = 0.15,
-    energy_threshold: float = 0.4,
-    energy_cost_per_upskill: float = 0.4,
-    energy_cost_per_intensive_work: float = 0.5,
-    energy_decline_per_training_month: float = 0.15,
-    energy_recovery_per_month: float = 0.10,
+    energy_threshold: float = 0.30,
+    upskill_energy_footprint: float = 0.15,
+    intensive_work_energy_footprint: float = 0.20,
+    training_energy_footprint: float = 0.15,
     intensive_work_months: int = 3,
     occ_skill_passive_months: int = 12,
     occupations: Optional[Dict[str, Any]] = None,
@@ -49,7 +48,6 @@ def _build_system_prompt(
     forced_sale_discount: float = 0.10,
     min_cash_buffer: float = 2_000.0,
     rest_health_gain: float = 0.02,
-    rest_energy_gain: float = 0.3,
     rest_income_penalty: float = 0.20,
     medical_care_cost: float = 3_000.0,
     medical_care_health_gain: float = 0.05,
@@ -250,9 +248,9 @@ values fluctuate monthly — they can go up OR down.  Key rules:
 
 **Health** ({initial_health:.1f} at start, range 0.0–{health_max:.1f})
   Declines every month, faster with age — but you CAN restore it:
-  - `rest`: +{rest_health_gain:.2f} health and +{rest_energy_gain:.0%}
-    energy, but you earn only {1 - rest_income_penalty:.0%} of your normal
-    income that month.
+  - `rest`: +{rest_health_gain:.2f} health and releases your non-work energy
+    occupancy (training/upskill/intensive work), but you earn only
+    {1 - rest_income_penalty:.0%} of your normal income that month.
   - `medical_care`: +{medical_care_health_gain:.2f} health immediately, for
     ${medical_care_cost:,.0f} cash (max {medical_care_max_per_year}× per year).
   If health drops below an occupation's minimum threshold while employed,
@@ -260,10 +258,15 @@ values fluctuate monthly — they can go up OR down.  Key rules:
   and the game ends.
 
 **Energy** ({initial_energy:.1f} at start, range 0.0–1.0)
-  Spent on upskill ({energy_cost_per_upskill:.0%}) and intensive_work
-  ({energy_cost_per_intensive_work:.0%}).  Drains {energy_decline_per_training_month*100:.0f}%/mo during occupation
-  training.  Recovers {energy_recovery_per_month*100:.0f}%/mo when not
-  training.  Need ≥{energy_threshold:.0%} to start upskill or intensive_work.
+  Energy is a fixed capacity that your activities OCCUPY, not a fuel you
+  spend.  Being employed occupies part of it (different jobs occupy
+  different amounts — your reported "energy" is the remaining free
+  capacity).  Upskilling occupies another {upskill_energy_footprint:.0%},
+  intensive work {intensive_work_energy_footprint:.0%}, and occupation training
+  {training_energy_footprint:.0%} — each released when the activity ends.
+  `rest` releases the non-work occupancy but never your job's own
+  occupancy.  Need ≥{energy_threshold:.0%} free energy to start upskill or
+  intensive work.
 
 **General Skill** ({initial_gen} at start, range 1–{max_general_skill})
   Transferable capability.  Determines which occupations you can enter.
@@ -289,9 +292,9 @@ The month ends after they execute — there is no second chance.
 | Tool | Effect | Requirements & Cost |
 |---|---|---|
 | `switch_occupation(id)` | Change career.  General skill carries over (same industry ~80%, unrelated ~20%).  Occupation skill resets. | gen_skill ≥ occupation minimum, health ≥ occupation minimum.  **manufacturing_worker is always free** (no cash, no training).  All other jobs: cash ≥ ${switch_base_cost:,.0f} + entry_cost + ${living_expense:,.0f} buffer.  Training 0–6 months. |
-| `upskill` | General skill +{upskill_skill_boost}.  Unlocks new occupations, boosts salary. | ${upskill_cost:,.0f} cash + {energy_cost_per_upskill:.0%} energy.  {upskill_months} months.  Need ≥${upskill_cost + living_expense:,.0f} cash + ≥{energy_threshold:.0%} energy. |
-| `intensive_work` | Occupation skill +1 in current job.  Accelerates tier promotion. | {energy_cost_per_intensive_work:.0%} energy (NO cash).  {intensive_work_months} months.  Must be employed, ≥{energy_threshold:.0%} energy. |
-| `rest` | Recover {rest_health_gain:.2f} health and {rest_energy_gain:.0%} energy this month. | Earn only {1 - rest_income_penalty:.0%} of normal income this month. |
+| `upskill` | General skill +{upskill_skill_boost}.  Unlocks new occupations, boosts salary. | ${upskill_cost:,.0f} cash.  Occupies {upskill_energy_footprint:.0%} energy for {upskill_months} months.  Need ≥${upskill_cost + living_expense:,.0f} cash + ≥{energy_threshold:.0%} free energy. |
+| `intensive_work` | Occupation skill +1 in current job.  Accelerates tier promotion. | Occupies {intensive_work_energy_footprint:.0%} energy (NO cash) for {intensive_work_months} months.  Must be employed, ≥{energy_threshold:.0%} free energy. |
+| `rest` | Recover {rest_health_gain:.2f} health; releases training/upskill/intensive-work occupancy (not your job's) this month. | Earn only {1 - rest_income_penalty:.0%} of normal income this month. |
 | `medical_care` | Recover {medical_care_health_gain:.2f} health immediately. | ${medical_care_cost:,.0f} cash.  Max {medical_care_max_per_year}×/year. |
 | `quit_job` | Resign immediately.  Income → $0.  Living expenses continue. | Must be employed. |
 | `deposit(amount)` | Cash → savings.  Earns monthly interest. | Keep ≥${living_expense:,.0f} cash.  amount ≤ cash − ${living_expense:,.0f}. |
@@ -332,9 +335,10 @@ class LLMAgent:
         upskill_skill_boost: int = 1,
         max_skill_level: int = 10,
         switch_base_cost: float = 2_000.0,
-        energy_threshold_for_upskill: float = 0.4,
-        energy_cost_per_intensive_work: float = 0.5,
-        energy_decline_per_training_month: float = 0.15,
+        energy_threshold_for_upskill: float = 0.30,
+        upskill_energy_footprint: float = 0.15,
+        intensive_work_energy_footprint: float = 0.20,
+        training_energy_footprint: float = 0.15,
         intensive_work_months: int = 3,
         occ_skill_passive_months: int = 12,
         occupations: Optional[Dict[str, Any]] = None,
@@ -343,7 +347,6 @@ class LLMAgent:
         forced_sale_discount: float = 0.10,
         min_cash_buffer: float = 2_000.0,
         rest_health_gain: float = 0.02,
-        rest_energy_gain: float = 0.3,
         rest_income_penalty: float = 0.20,
         medical_care_cost: float = 3_000.0,
         medical_care_health_gain: float = 0.05,
@@ -365,8 +368,9 @@ class LLMAgent:
             max_occ_skill=max_skill_level,
             switch_base_cost=switch_base_cost,
             energy_threshold=energy_threshold_for_upskill,
-            energy_cost_per_intensive_work=energy_cost_per_intensive_work,
-            energy_decline_per_training_month=energy_decline_per_training_month,
+            upskill_energy_footprint=upskill_energy_footprint,
+            intensive_work_energy_footprint=intensive_work_energy_footprint,
+            training_energy_footprint=training_energy_footprint,
             intensive_work_months=intensive_work_months,
             occ_skill_passive_months=occ_skill_passive_months,
             occupations=occupations,
@@ -374,7 +378,6 @@ class LLMAgent:
             forced_sale_discount=forced_sale_discount,
             min_cash_buffer=min_cash_buffer,
             rest_health_gain=rest_health_gain,
-            rest_energy_gain=rest_energy_gain,
             rest_income_penalty=rest_income_penalty,
             medical_care_cost=medical_care_cost,
             medical_care_health_gain=medical_care_health_gain,
@@ -401,6 +404,8 @@ class LLMAgent:
                 max_general_skill=max_skill_level,
                 switch_base_cost=switch_base_cost,
                 energy_threshold=energy_threshold_for_upskill,
+                upskill_energy_footprint=upskill_energy_footprint,
+                intensive_work_energy_footprint=intensive_work_energy_footprint,
                 intensive_work_months=intensive_work_months,
                 max_occ_skill=max_skill_level,
                 occ_skill_passive_months=occ_skill_passive_months,
@@ -408,7 +413,6 @@ class LLMAgent:
                 min_cash_buffer=min_cash_buffer,
                 forced_sale_discount=forced_sale_discount,
                 rest_health_gain=rest_health_gain,
-                rest_energy_gain=rest_energy_gain,
                 rest_income_penalty=rest_income_penalty,
                 medical_care_cost=medical_care_cost,
                 medical_care_health_gain=medical_care_health_gain,

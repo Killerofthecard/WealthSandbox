@@ -180,32 +180,36 @@ class TestCareerSystem(unittest.TestCase):
         self.sys.process_quit_job(state)
         self.assertTrue(any("Cannot quit" in e for e in state.last_month_events))
 
-    # --- Energy tests (via EnergySystem) ---
+    # --- Energy tests (via EnergySystem, occupancy model) ---
 
     def test_energy_consumed_during_training(self):
         from wealthsandbox.systems.energy import EnergySystem
-        es = EnergySystem()
+        es = EnergySystem(self.sys)
         state = AgentState(
             occupation_id="manufacturing_worker",
             job_status=JobStatus.EMPLOYED,
             general_skill=3,
-            energy=1.0,
             training_months_remaining=3,
             training_target_occupation="software_engineer",
             occupation_skills={"manufacturing_worker": 1},
         )
         es.tick(state, {})
-        self.assertLess(state.energy, 1.0)
+        # job (0.50) + training (0.15) → energy 0.35
+        self.assertAlmostEqual(state.energy, 1.0 - 0.50 - 0.15, places=6)
 
-    def test_energy_recovered_when_not_training(self):
+    def test_energy_released_when_not_training(self):
         from wealthsandbox.systems.energy import EnergySystem
-        es = EnergySystem()
+        es = EnergySystem(self.sys)
         state = AgentState(
-            energy=0.5,
+            occupation_id="manufacturing_worker",
+            job_status=JobStatus.EMPLOYED,
+            general_skill=3,
             training_months_remaining=0,
+            occupation_skills={"manufacturing_worker": 1},
         )
         es.tick(state, {})
-        self.assertGreater(state.energy, 0.5)
+        # job only → energy 0.50 (training occupancy released)
+        self.assertAlmostEqual(state.energy, 1.0 - 0.50, places=6)
 
     # --- Process switch ---
 
@@ -456,38 +460,84 @@ class TestEnergySystem(unittest.TestCase):
 
     def setUp(self):
         from wealthsandbox.systems.energy import EnergySystem
-        self.es = EnergySystem(cost_per_upskill=0.4)
+        self.career = CareerSystem()
+        self.es = EnergySystem(self.career)
 
-    def _state(self, energy: float = 1.0, training: int = 0) -> AgentState:
+    def _state(
+        self,
+        occupation_id: str = "manufacturing_worker",
+        job_status: JobStatus = JobStatus.EMPLOYED,
+        training: int = 0,
+        upskill: int = 0,
+        intensive: int = 0,
+        resting: bool = False,
+    ) -> AgentState:
         return AgentState(
-            occupation_id="manufacturing_worker",
-            job_status=JobStatus.EMPLOYED,
-            energy=energy,
+            occupation_id=occupation_id,
+            job_status=job_status,
             training_months_remaining=training,
+            upskill_months_remaining=upskill,
+            intensive_work_months_remaining=intensive,
+            resting_this_month=resting,
             occupation_skills={"manufacturing_worker": 1},
         )
 
-    def test_upskill_deducts_energy(self):
-        s = self._state(energy=0.8)
+    def test_employed_occupies_job_footprint(self):
+        # manufacturing_worker footprint 0.50 → available energy 0.50
+        s = self._state()
+        self.es.tick(s, {})
+        self.assertAlmostEqual(s.energy, 0.50, places=6)
+
+    def test_unemployed_energy_full(self):
+        s = self._state(occupation_id="", job_status=JobStatus.UNEMPLOYED)
+        self.es.tick(s, {})
+        self.assertAlmostEqual(s.energy, 1.0, places=6)
+
+    def test_training_adds_occupancy(self):
+        s = self._state(training=3)
+        self.es.tick(s, {})
+        self.assertAlmostEqual(s.energy, 1.0 - 0.50 - 0.15, places=6)
+
+    def test_upskill_adds_occupancy(self):
+        s = self._state(upskill=3)
+        self.es.tick(s, {})
+        self.assertAlmostEqual(s.energy, 1.0 - 0.50 - 0.15, places=6)
+
+    def test_intensive_work_adds_occupancy(self):
+        s = self._state(intensive=3)
+        self.es.tick(s, {})
+        self.assertAlmostEqual(s.energy, 1.0 - 0.50 - 0.20, places=6)
+
+    def test_rest_offsets_non_work_occupancy_only(self):
+        # rest releases training/upskill/intensive occupancy, keeps job's 0.50
+        s = self._state(training=3, upskill=2, intensive=1, resting=True)
+        self.es.tick(s, {})
+        self.assertAlmostEqual(s.energy, 1.0 - 0.50, places=6)
+
+    def test_energy_never_negative(self):
+        # heavy occupancy clamps available energy at 0, never below
+        s = self._state(training=3, upskill=2, intensive=1)
+        self.es.tick(s, {})
+        self.assertGreaterEqual(s.energy, 0.0)
+
+    def test_handle_action_is_noop(self):
+        # occupancy model: no per-action mutation — energy recomputed in tick
+        s = self._state()
+        s.energy = 0.99
         action = Action(career_move=CareerMove.UPSKILL)
-        self.es.handle_action(action, s)
-        self.assertAlmostEqual(s.energy, 0.4)
+        consumed = self.es.handle_action(action, s)
+        self.assertFalse(consumed)
+        self.assertAlmostEqual(s.energy, 0.99, places=6)
 
-    def test_intensive_work_deducts_energy(self):
-        s = self._state(energy=0.8)
-        action = Action(career_move=CareerMove.INTENSIVE_WORK)
-        self.es.handle_action(action, s)
-        self.assertAlmostEqual(s.energy, 0.3)
-
-    def test_energy_drained_during_training(self):
-        s = self._state(energy=0.5, training=3)
-        self.es.tick(s, {})
-        self.assertAlmostEqual(s.energy, 0.35)
-
-    def test_energy_recovered_when_not_training(self):
-        s = self._state(energy=0.5, training=0)
-        self.es.tick(s, {})
-        self.assertAlmostEqual(s.energy, 0.60)
+    def test_different_occupations_different_footprint(self):
+        # investment_banker 0.60 > civil_servant 0.45
+        ib = self._state(occupation_id="investment_banker")
+        cs = self._state(occupation_id="civil_servant")
+        self.es.tick(ib, {})
+        self.es.tick(cs, {})
+        self.assertAlmostEqual(ib.energy, 0.40, places=6)
+        self.assertAlmostEqual(cs.energy, 0.55, places=6)
+        self.assertLess(ib.energy, cs.energy)
 
 
 if __name__ == "__main__":

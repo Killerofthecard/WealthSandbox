@@ -74,18 +74,17 @@ class EnvConfig:
     # ---- wellbeing (health recovery via rest / medical_care) ----
     health_max: float = 1.0                # ceiling health cannot exceed
     rest_health_gain: float = 0.02         # health recovered by `rest`
-    rest_energy_gain: float = 0.3          # energy recovered by `rest`
     rest_income_penalty: float = 0.20      # fraction of income lost in a month you rest
     medical_care_cost: float = 3_000.0     # cash cost of `medical_care`
     medical_care_health_gain: float = 0.05 # health recovered by `medical_care`
     medical_care_max_per_year: int = 2     # max `medical_care` uses per year
 
-    # ---- energy (short-term stamina — gates training pacing) ----
-    energy_cost_per_upskill: float = 0.4          # one-time deduction when starting upskill
-    energy_cost_per_intensive_work: float = 0.5   # one-time deduction when starting intensive work
-    energy_decline_per_training_month: float = 0.15  # drain per month while training
-    energy_recovery_per_month: float = 0.10        # recovery per month when not training
-    energy_threshold_for_upskill: float = 0.4      # minimum energy to start upskill / intensive work
+    # ---- energy (occupancy model — a fixed capacity occupied by work/training) ----
+    energy_capacity: float = 1.0                  # total energy capacity
+    training_energy_footprint: float = 0.15       # capacity occupied during occupation training
+    upskill_energy_footprint: float = 0.15        # capacity occupied during upskill
+    intensive_work_energy_footprint: float = 0.20 # capacity occupied during intensive work
+    energy_threshold_for_upskill: float = 0.30    # min available energy to start upskill / intensive work
 
     # ---- occupation skill (within-career progression) ----
     intensive_work_months: int = 3          # months to gain +1 occ_skill via intensive work
