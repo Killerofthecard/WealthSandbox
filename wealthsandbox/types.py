@@ -5,7 +5,7 @@ and the Environment: Action, Observation, and AgentState.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Any
+from typing import Any, Dict, List, Optional
 from enum import Enum
 
 
@@ -60,6 +60,33 @@ class Tier:
 
 
 # ---------------------------------------------------------------------------
+# Marketable assets
+# ---------------------------------------------------------------------------
+
+# asset_id for the S&P 500 index fund — the first (and currently only) asset
+# class in the portfolio.  Adding a new asset class means a new constant + a
+# new system that owns its own position key, NOT a new set of flat fields.
+STOCK_INDEX = "stock_index"
+
+
+@dataclass
+class Position:
+    """One marketable-asset holding (stock index, bonds, gold, ...).
+
+    ``value`` is the current mark-to-market value; ``cost_basis`` is the
+    cumulative net capital deployed (drives the reported profit/loss).  The
+    two private fields are per-month bookkeeping for the T+1 / return rules:
+    purchases this month do not earn this month's return, and sales this month
+    settle next month.
+    """
+    value: float = 0.0
+    cost_basis: float = 0.0
+    last_return: float = 0.0      # this asset's return over the most recent month
+    _month_buys: float = 0.0      # internal: purchases this month (excluded from return)
+    _month_sells: float = 0.0     # internal: sales this month (settle next month)
+
+
+# ---------------------------------------------------------------------------
 # Dataclasses
 # ---------------------------------------------------------------------------
 
@@ -106,13 +133,11 @@ class AgentState:
     resting_this_month: bool = False        # set by `rest`; reduces this month's income
     medical_care_uses_this_year: int = 0    # medical_care uses in the current year
 
-    # Stock market
-    stock_value: float = 0.0                   # market value of stock holdings
-    pending_settlement: float = 0.0            # sale proceeds, available next month
-    total_invested: float = 0.0                # cumulative net capital deployed
-    last_month_stock_return: float = 0.0       # sp500_tr from the most recent month
-    _this_month_stock_purchases: float = 0.0   # internal: new purchases excluded from return
-    _this_month_stock_sales: float = 0.0       # internal: sales deferred to next tick
+    # Marketable assets — a portfolio of positions keyed by asset_id (e.g.
+    # STOCK_INDEX).  Adding a new asset class (bonds, gold, real estate) is a
+    # new dict entry + a system, not a new set of flat fields on this state.
+    positions: Dict[str, Position] = field(default_factory=dict)
+    pending_settlement: float = 0.0            # T+1 sale proceeds, available next month
 
     # History / events
     career_history: List[Dict[str, Any]] = field(default_factory=list)
@@ -131,6 +156,32 @@ class AgentState:
         borrow/repay, buy/sell) are deliberately NOT recorded.
         """
         self.monthly_flow[key] = self.monthly_flow.get(key, 0.0) + amount
+
+
+# ---------------------------------------------------------------------------
+# Portfolio helpers
+# ---------------------------------------------------------------------------
+
+def get_position(state: AgentState, asset_id: str) -> Optional[Position]:
+    """Return the agent's position in *asset_id*, or ``None`` if they hold none."""
+    return state.positions.get(asset_id)
+
+
+def net_worth(state: AgentState) -> float:
+    """Total wealth = cash + savings + marketable assets + pending settlement − debt.
+
+    This is the single source of truth for bankruptcy checks, scoring, and any
+    reported net worth.  New asset classes are automatically included because
+    it sums the whole ``positions`` portfolio.
+    """
+    assets = sum(p.value for p in state.positions.values())
+    return (
+        state.cash
+        + state.savings
+        + assets
+        + state.pending_settlement
+        - state.loan_balance
+    )
 
 
 @dataclass

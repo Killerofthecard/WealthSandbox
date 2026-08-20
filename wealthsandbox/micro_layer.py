@@ -2,7 +2,7 @@
 
 from typing import Any, Dict
 
-from wealthsandbox.types import AgentState, JobStatus
+from wealthsandbox.types import AgentState, JobStatus, STOCK_INDEX, net_worth
 from wealthsandbox.profile import AgentProfile
 
 
@@ -41,9 +41,14 @@ class MicroLayer:
     def snapshot(self) -> Dict[str, Any]:
         s = self.state
         occ_skill = s.occupation_skills.get(s.occupation_id, 1) if s.occupation_id else 0
-        # Compute P&L
-        stock_pnl = s.stock_value - s.total_invested if s.stock_value > 0 else 0.0
-        net_worth = s.cash + s.savings + s.stock_value + s.pending_settlement - s.loan_balance
+        # Derive the stock projection from the portfolio container.  The
+        # individual dict keeps the same agent-facing keys, so the LLM
+        # observation and trajectory format are unchanged.
+        stock = s.positions.get(STOCK_INDEX)
+        stock_value = stock.value if stock else 0.0
+        cost_basis = stock.cost_basis if stock else 0.0
+        last_return = stock.last_return if stock else 0.0
+        stock_pnl = stock_value - cost_basis if stock_value > 0 else 0.0
         return {
             "age": s.age,
             "health": round(s.health, 3),
@@ -51,12 +56,12 @@ class MicroLayer:
             "cash": round(s.cash, 2),
             "savings": round(s.savings, 2),
             "loan_balance": round(s.loan_balance, 2),
-            "stock_value": round(s.stock_value, 2),
+            "stock_value": round(stock_value, 2),
             "pending_settlement": round(s.pending_settlement, 2),
-            "total_invested": round(s.total_invested, 2),
-            "last_month_stock_return": round(s.last_month_stock_return, 6),
+            "total_invested": round(cost_basis, 2),
+            "last_month_stock_return": round(last_return, 6),
             "stock_pnl": round(stock_pnl, 2),
-            "net_worth": round(net_worth, 2),
+            "net_worth": round(net_worth(s), 2),
             "occupation_id": s.occupation_id,
             "general_skill": s.general_skill,
             "occ_skill": occ_skill,

@@ -4,8 +4,19 @@ import unittest
 from wealthsandbox.env import WealthSandBoxEnv
 from wealthsandbox.config import EnvConfig
 from wealthsandbox.profile import AgentProfile
-from wealthsandbox.types import Action, CareerMove, AgentState, JobStatus
+from wealthsandbox.types import Action, CareerMove, AgentState, Position, STOCK_INDEX
 from wealthsandbox.systems.asset import AssetSystem
+
+
+def _stock(s):
+    """Return the agent's stock position, or None if they hold none."""
+    return s.positions.get(STOCK_INDEX)
+
+
+def _stock_value(s):
+    """Return the agent's stock market value (0.0 if no position)."""
+    p = s.positions.get(STOCK_INDEX)
+    return p.value if p else 0.0
 
 
 class TestAssetSystem(unittest.TestCase):
@@ -14,8 +25,10 @@ class TestAssetSystem(unittest.TestCase):
     def _make_state(self, cash=10_000.0, stock_value=0.0, total_invested=0.0):
         s = AgentState()
         s.cash = cash
-        s.stock_value = stock_value
-        s.total_invested = total_invested
+        if stock_value or total_invested:
+            s.positions[STOCK_INDEX] = Position(
+                value=stock_value, cost_basis=total_invested,
+            )
         return s
 
     def test_buy_adds_to_stock_value(self):
@@ -23,65 +36,65 @@ class TestAssetSystem(unittest.TestCase):
         s = self._make_state(cash=5_000)
         sys._handle_buy(s, 2_000)
         self.assertEqual(s.cash, 3_000)
-        self.assertEqual(s.stock_value, 2_000)
-        self.assertEqual(s.total_invested, 2_000)
+        self.assertEqual(_stock(s).value, 2_000)
+        self.assertEqual(_stock(s).cost_basis, 2_000)
 
     def test_sell_reduces_stock_value(self):
         sys = AssetSystem()
         s = self._make_state(cash=5_000, stock_value=4_000, total_invested=4_000)
         sys._handle_sell(s, 2_000)
-        self.assertEqual(s.stock_value, 2_000)
+        self.assertEqual(_stock(s).value, 2_000)
         # Sale proceeds go to temp field, moved to pending in finalize()
-        self.assertEqual(s._this_month_stock_sales, 2_000)
+        self.assertEqual(_stock(s)._month_sells, 2_000)
         self.assertEqual(s.cash, 5_000)  # cash unchanged until settlement
         # total_invested reduced proportionally
-        self.assertAlmostEqual(s.total_invested, 2_000)
+        self.assertAlmostEqual(_stock(s).cost_basis, 2_000)
         # After finalize, pending should be set
         sys.finalize(s, {})
         self.assertEqual(s.pending_settlement, 2_000)
-        self.assertEqual(s._this_month_stock_sales, 0.0)
+        self.assertEqual(_stock(s)._month_sells, 0.0)
 
     def test_sell_clamped_to_stock_value(self):
         sys = AssetSystem()
         s = self._make_state(cash=5_000, stock_value=1_000, total_invested=1_000)
         sys._handle_sell(s, 5_000)  # tries to sell more than held
-        self.assertEqual(s.stock_value, 0)
-        self.assertEqual(s._this_month_stock_sales, 1_000)
-        self.assertEqual(s.total_invested, 0)
+        self.assertEqual(_stock(s).value, 0)
+        self.assertEqual(_stock(s)._month_sells, 1_000)
+        self.assertEqual(_stock(s).cost_basis, 0)
         # After finalize
         sys.finalize(s, {})
         self.assertEqual(s.pending_settlement, 1_000)
 
     def test_market_return_applied_in_tick(self):
-        """stock_value should change by the market return in tick."""
+        """stock value should change by the market return in tick."""
         sys = AssetSystem()
         s = self._make_state(stock_value=10_000, total_invested=10_000)
         macro = {"sp500_tr": 0.10, "gs10": 4.0}
         sys.tick(s, macro)
-        self.assertAlmostEqual(s.stock_value, 11_000)
-        self.assertAlmostEqual(s.last_month_stock_return, 0.10)
+        self.assertAlmostEqual(_stock(s).value, 11_000)
+        self.assertAlmostEqual(_stock(s).last_return, 0.10)
 
     def test_negative_return_applied_in_tick(self):
         sys = AssetSystem()
         s = self._make_state(stock_value=10_000, total_invested=10_000)
         macro = {"sp500_tr": -0.20, "gs10": 4.0}
         sys.tick(s, macro)
-        self.assertAlmostEqual(s.stock_value, 8_000)
+        self.assertAlmostEqual(_stock(s).value, 8_000)
 
     def test_new_purchase_excluded_from_this_month_return(self):
         """Purchases made in buy_stock do NOT earn this month's return."""
         sys = AssetSystem()
         s = self._make_state(stock_value=10_000, total_invested=10_000)
         # Simulate buying 5_000 this month
-        s._this_month_stock_purchases = 5_000
-        s.stock_value = 15_000  # 10K old + 5K new
+        _stock(s)._month_buys = 5_000
+        _stock(s).value = 15_000  # 10K old + 5K new
 
         macro = {"sp500_tr": 0.10, "gs10": 4.0}
         sys.tick(s, macro)
         # Only the pre-existing 10_000 should get the +10% return.
         # 10_000 * 1.10 + 5_000 = 16_000
-        self.assertAlmostEqual(s.stock_value, 16_000)
-        self.assertEqual(s._this_month_stock_purchases, 0.0)
+        self.assertAlmostEqual(_stock(s).value, 16_000)
+        self.assertEqual(_stock(s)._month_buys, 0.0)
 
     def test_settlement_arrives_in_tick(self):
         """Sale proceeds from last month should arrive as cash in tick."""
@@ -102,9 +115,9 @@ class TestAssetSystem(unittest.TestCase):
         # Stock consumed = 5_000 / 0.9 ≈ 5_555.56
         self.assertAlmostEqual(raised, 5_000)
         self.assertAlmostEqual(s.cash, 5_000)
-        self.assertAlmostEqual(s.stock_value, 10_000 - 5_000 / 0.9)
+        self.assertAlmostEqual(_stock(s).value, 10_000 - 5_000 / 0.9)
         # Total invested reduced proportionally
-        self.assertLess(s.total_invested, 10_000)
+        self.assertLess(_stock(s).cost_basis, 10_000)
 
     def test_force_liquidate_capped_by_stock_value(self):
         sys = AssetSystem(forced_sale_discount=0.10)
@@ -112,7 +125,7 @@ class TestAssetSystem(unittest.TestCase):
         raised = sys.force_liquidate(s, 10_000)
         # Can only raise 1_000 * 0.9 = 900
         self.assertAlmostEqual(raised, 900)
-        self.assertAlmostEqual(s.stock_value, 0)
+        self.assertAlmostEqual(_stock(s).value, 0)
 
     def test_force_liquidate_no_stocks(self):
         sys = AssetSystem()
@@ -129,7 +142,6 @@ class TestAssetSystem(unittest.TestCase):
         sys = AssetSystem()
         s = self._make_state(cash=0)
         s.savings = 0
-        s.stock_value = 0
         s.pending_settlement = 0
         s.loan_balance = 0
         self.assertEqual(sys.check_dead(s), "bankruptcy")
@@ -168,8 +180,8 @@ class TestAssetIntegration(unittest.TestCase):
 
         self.assertFalse(info.get("action_rejected"))
         self.assertAlmostEqual(env.micro.state.cash, cash_before + env.micro.state.monthly_after_tax_income - 2_000 - 1_000, places=2)
-        self.assertAlmostEqual(env.micro.state.stock_value, 1_000)
-        self.assertAlmostEqual(env.micro.state.total_invested, 1_000)
+        self.assertAlmostEqual(_stock(env.micro.state).value, 1_000)
+        self.assertAlmostEqual(_stock(env.micro.state).cost_basis, 1_000)
 
     def test_sell_stock_via_env(self):
         """Sell stock — cash unchanged, pending_settlement populated."""
@@ -192,8 +204,8 @@ class TestAssetIntegration(unittest.TestCase):
         # Settlement is deferred to finalize, so after full step it appears
         self.assertAlmostEqual(env.micro.state.pending_settlement, 500)
         # Remaining stock = $500 marked-to-market by this month's return.
-        ret = env.micro.state.last_month_stock_return
-        self.assertAlmostEqual(env.micro.state.stock_value, 500 * (1 + ret), places=2)
+        ret = _stock(env.micro.state).last_return
+        self.assertAlmostEqual(_stock(env.micro.state).value, 500 * (1 + ret), places=2)
 
     def test_sell_settlement_arrives_next_month(self):
         """T+1: sale cash should arrive in the NEXT month's tick."""
@@ -224,7 +236,7 @@ class TestAssetIntegration(unittest.TestCase):
         self.assertTrue(info.get("action_rejected"))
 
     def test_sell_stock_rejected_when_no_holdings(self):
-        """Selling stock with 0 stock_value should be rejected."""
+        """Selling stock with 0 stock value should be rejected."""
         env = WealthSandBoxEnv(EnvConfig(seed=1))
         env.reset(seed=1)
         action = Action(career_move=CareerMove.SELL_STOCK, amount=500)
@@ -232,7 +244,7 @@ class TestAssetIntegration(unittest.TestCase):
         self.assertTrue(info.get("action_rejected"))
 
     def test_sell_more_than_held_rejected(self):
-        """Selling more than stock_value should be rejected by the amount guard."""
+        """Selling more than stock value should be rejected by the amount guard."""
         env = WealthSandBoxEnv(EnvConfig(seed=1))
         env.reset(seed=1)
         env.step(action=Action(
@@ -265,9 +277,8 @@ class TestAssetIntegration(unittest.TestCase):
         # Now wipe out cash and savings before next month
         env.micro.state.cash = 100
         env.micro.state.savings = 0
-        # Clear _this_month_stock_purchases so tick applies return to ALL stock
-        env.micro.state._this_month_stock_purchases = 0.0
-        stock_before = env.micro.state.stock_value
+        # Clear _month_buys so tick applies return to ALL stock
+        _stock(env.micro.state)._month_buys = 0.0
 
         obs, reward, done, info = env.step(action=Action(career_move=CareerMove.NONE))
         # Unemployed → no income → cash ($100) < living expense ($2,000)
@@ -284,7 +295,7 @@ class TestAssetIntegration(unittest.TestCase):
         # Wipe everything
         env.micro.state.cash = 0
         env.micro.state.savings = 0
-        env.micro.state.stock_value = 0
+        env.micro.state.positions.clear()
         env.micro.state.loan_balance = 0
 
         obs, reward, done, info = env.step(action=Action(career_move=CareerMove.NONE))
@@ -335,7 +346,7 @@ class TestAssetIntegration(unittest.TestCase):
         # Month 2: auto-work
         env.step(action=Action(career_move=CareerMove.NONE))
         self.assertGreater(env.micro.state.cash, 0)
-        self.assertEqual(env.micro.state.stock_value, 0)
+        self.assertEqual(_stock_value(env.micro.state), 0)
         self.assertEqual(env.micro.state.pending_settlement, 0)
 
         # Month 3: deposit some cash

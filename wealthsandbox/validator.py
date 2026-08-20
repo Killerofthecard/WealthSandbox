@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Callable, Dict, List
 
-from wealthsandbox.types import Action, AgentState, CareerMove, JobStatus
+from wealthsandbox.types import Action, AgentState, CareerMove, JobStatus, STOCK_INDEX
 
 
 # ---------------------------------------------------------------------------
@@ -329,8 +329,10 @@ def guard_buy_stock_amount(
 
 
 def guard_sell_stock(state: AgentState, career) -> GuardResult:
-    """Can the agent sell stocks?  Must have stock_value > 0."""
-    if state.stock_value <= 0:
+    """Can the agent sell stocks?  Must have stock holdings > 0."""
+    stock = state.positions.get(STOCK_INDEX)
+    stock_value = stock.value if stock else 0.0
+    if stock_value <= 0:
         return GuardResult.reject(
             "sell_stock_rejected_no_stocks",
             "No stocks to sell — stock_value is $0.",
@@ -342,16 +344,18 @@ def guard_sell_stock_amount(
     state: AgentState, career, amount: float
 ) -> GuardResult:
     """Validate the specific sell *amount*."""
+    stock = state.positions.get(STOCK_INDEX)
+    stock_value = stock.value if stock else 0.0
     if amount <= 0:
         return GuardResult.reject(
             "sell_stock_rejected_amount_zero",
             "Sell amount must be greater than zero.",
         )
-    if amount > state.stock_value:
+    if amount > stock_value:
         return GuardResult.reject(
             "sell_stock_rejected_amount_exceeds_holdings",
             f"Cannot sell ${amount:,.0f} — stock holdings only worth "
-            f"${state.stock_value:,.0f}.",
+            f"${stock_value:,.0f}.",
         )
     return GuardResult.ok()
 

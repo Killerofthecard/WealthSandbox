@@ -34,7 +34,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from wealthsandbox import WealthSandBoxEnv, EnvConfig
 from wealthsandbox.agents import LLMAgent, Decision, ToolCall
-from wealthsandbox.types import Action, CareerMove
+from wealthsandbox.types import Action, CareerMove, net_worth as compute_net_worth
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +335,7 @@ def print_final_summary(env, total_reward: float, months_played: int) -> None:
     print(f"  {'Occ Skill':24} {occ_skill}")
     print(f"  {'Health':24} {s.health:.3f}")
     print(f"  {'Job Status':24} {s.job_status.value}")
-    net_worth = s.cash + s.savings + s.stock_value + s.pending_settlement - s.loan_balance
+    net_worth = compute_net_worth(s)
     price_level = env.macro.price_level or 1.0
     print(f"  {'Net worth (real)':24} {money(net_worth / price_level)}")
     print(f"{C.GREEN}{C.BOLD}{'═' * 80}{C.RESET}")
@@ -825,7 +825,7 @@ def main() -> int:
 
     # Build final summary
     s = env.micro.state
-    net_worth = s.cash + s.savings + s.stock_value + s.pending_settlement - s.loan_balance
+    net_worth = compute_net_worth(s)
     price_level = env.macro.price_level or 1.0
     final_summary = {
         "months_played": months_completed,

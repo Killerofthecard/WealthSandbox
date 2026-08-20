@@ -19,7 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from wealthsandbox.config import EnvConfig
 from wealthsandbox.macro_layer import MacroLayer
 from wealthsandbox.micro_layer import MicroLayer
-from wealthsandbox.types import Action, Observation, AgentState, CareerMove
+from wealthsandbox.types import Action, Observation, AgentState, CareerMove, STOCK_INDEX, net_worth
 from wealthsandbox.agents.tools import ToolCall, SWITCH_OCCUPATION, UPSKILL, INTENSIVE_WORK, QUIT_JOB, DEPOSIT, WITHDRAW, BORROW, REPAY, BUY_STOCK, SELL_STOCK, REST, MEDICAL_CARE
 from wealthsandbox.systems.base import BaseSystem
 from wealthsandbox.systems.career import CareerSystem
@@ -341,16 +341,20 @@ class WealthSandBoxEnv:
             state.cumulative_flow[key] = state.cumulative_flow.get(key, 0.0) + val
 
         # ---- Phase 4: archive + observation --------------------------------
+        stock = state.positions.get(STOCK_INDEX)
+        stock_value = stock.value if stock else 0.0
+        total_invested = stock.cost_basis if stock else 0.0
+        last_month_stock_return = stock.last_return if stock else 0.0
         self.history.append({
             "month": self.macro.total_months,
             "age": state.age,
             "cash": round(state.cash, 2),
             "savings": round(state.savings, 2),
             "loan_balance": round(state.loan_balance, 2),
-            "stock_value": round(state.stock_value, 2),
+            "stock_value": round(stock_value, 2),
             "pending_settlement": round(state.pending_settlement, 2),
-            "total_invested": round(state.total_invested, 2),
-            "last_month_stock_return": round(state.last_month_stock_return, 6),
+            "total_invested": round(total_invested, 2),
+            "last_month_stock_return": round(last_month_stock_return, 6),
             "energy": round(state.energy, 3),
             "occupation_id": state.occupation_id,
             "general_skill": state.general_skill,
@@ -683,13 +687,16 @@ class WealthSandBoxEnv:
                 f"(gen_skill {self.micro.state.general_skill}). "
             )
         narrative += f"Cash: ${self.micro.state.cash:,.0f}. "
-        if self.micro.state.stock_value > 0:
-            ret_pct = self.micro.state.last_month_stock_return * 100
-            pnl = self.micro.state.stock_value - self.micro.state.total_invested
+        stock = self.micro.state.positions.get(STOCK_INDEX)
+        stock_value = stock.value if stock else 0.0
+        if stock_value > 0:
+            ret_pct = (stock.last_return if stock else 0.0) * 100
+            cost_basis = stock.cost_basis if stock else 0.0
+            pnl = stock_value - cost_basis
             narrative += (
-                f"Stocks: ${self.micro.state.stock_value:,.0f} "
+                f"Stocks: ${stock_value:,.0f} "
                 f"({ret_pct:+.1f}% last month; "
-                f"invested ${self.micro.state.total_invested:,.0f}, "
+                f"invested ${cost_basis:,.0f}, "
                 f"P&L: ${pnl:+,.0f}). "
             )
         if self.micro.state.pending_settlement > 0:
@@ -697,13 +704,8 @@ class WealthSandBoxEnv:
                 f"Pending settlement: ${self.micro.state.pending_settlement:,.0f} "
                 f"(available next month). "
             )
-        net_worth = (
-            self.micro.state.cash + self.micro.state.savings
-            + self.micro.state.stock_value + self.micro.state.pending_settlement
-            - self.micro.state.loan_balance
-        )
         price_level = macro_snapshot.get("price_level", 1.0) or 1.0
-        real_net_worth = net_worth / price_level
+        real_net_worth = net_worth(self.micro.state) / price_level
         narrative += (
             f"Net worth: ${real_net_worth:,.0f} (inflation-adjusted). "
         )
